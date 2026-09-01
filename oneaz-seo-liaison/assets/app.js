@@ -48,6 +48,7 @@ function seed() {
     blockers: clone(window.DATA_MARKET.blockers),
     projects: clone(window.DATA_MARKET.projects),
     deliverables: clone(window.DATA_DELIVERABLES),
+    events: clone(window.DATA_VIEWS.events),
     assessments: [],
     log: []
   };
@@ -55,7 +56,15 @@ function seed() {
 function load() {
   try {
     var raw = localStorage.getItem(KEY);
-    if (raw) { var p = JSON.parse(raw); if (p && p.product) return p; }
+    if (raw) {
+      var p = JSON.parse(raw);
+      if (p && p.product) {
+        if (!p.events) p.events = clone(window.DATA_VIEWS.events);
+        if (!p.assessments) p.assessments = [];
+        p.product.forEach(function (x) { if (x.due === undefined) x.due = ''; });
+        return p;
+      }
+    }
   } catch (e) { /* private mode, blocked storage — fall through to seed */ }
   return seed();
 }
@@ -63,6 +72,26 @@ function save() {
   S.updated = TODAY;
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
   catch (e) { toast('Could not save to this browser — export a backup instead'); }
+  if (window.SYNC && SYNC.state.on) {
+    clearTimeout(save._t);
+    save._t = setTimeout(function () {
+      SYNC.push(S).then(function (r) {
+        if (r && r.conflict) toast('Not saved to the server — someone else saved first. Pull, then redo.');
+        else if (r && !r.ok && !r.skipped) toast('Server save failed: ' + SYNC.state.error);
+        var d = document.getElementById('sync-line');
+        if (d) d.textContent = syncLine();
+      });
+    }, 900);
+  }
+}
+function syncLine() {
+  if (!window.SYNC) return '';
+  var s = SYNC.state;
+  if (!SYNC.available()) return 'Local file — sync is off. Serve this folder over https to enable it.';
+  if (!s.on) return 'Not connected. Enter your desk key to sync with the server.';
+  if (s.error) return 'Last attempt failed: ' + s.error;
+  return 'Connected (' + (s.backend || 'server') + ') · version ' + (s.version === null ? '?' : s.version) +
+    (s.last ? ' · saved ' + s.last.replace('T', ' ').slice(0, 16) + ' UTC' : '');
 }
 
 /* --------------------------------------------------------- derived data */
@@ -113,17 +142,19 @@ var ONEAZ = {
 
 /* ------------------------------------------------------------ chrome */
 var NAV = [
-  ['', 'Dashboard'], ['product', 'Product radar'], ['markets', 'Markets'],
-  ['blockers', 'Blockers'], ['projects', 'Projects'], ['check', 'GEO checklist'],
-  ['people', 'Stakeholders'], ['brief', 'Briefings']
+  ['', 'Dashboard'], ['product', 'Product radar'], ['pmap', 'Product map'],
+  ['markets', 'Markets'], ['blockers', 'Blockers'], ['projects', 'Projects'],
+  ['paywall', 'Paywall'], ['check', 'GEO checklist'], ['people', 'People'],
+  ['brief', 'Briefings']
 ];
 function renderNav() {
   var cur = (location.hash.replace('#/', '').split('/')[0]) || '';
   var counts = {
     product: S.product.filter(function (p) { return needsMarkets(p) || needsProduct(p); }).length,
-    blockers: openBlockers().length,
-    brief: 0
+    blockers: openBlockers().length
   };
+  if (cur === 'map') cur = 'markets';
+  if (cur === 'cal') cur = 'people';
   document.getElementById('nav').innerHTML = NAV.map(function (n) {
     var on = n[0] === cur ? ' class="on"' : '';
     var c = counts[n[0]] ? '<span class="n">' + counts[n[0]] + '</span>' : '';
@@ -177,53 +208,22 @@ function viewDashboard() {
     tile(soon.length, 'Milestones in the next 45 days', soon.length ? 'Next: ' + fmt(soon[0].m.date) : '—') +
     '</div>';
 
-  /* Two lanes */
-  h += '<div class="section grid g-2">';
+  /* Filters + two lanes */
+  h += '<div class="filters" style="margin-top:20px">' +
+    sel('df-market', df.market, [['', 'All markets']].concat(
+      S.markets.filter(function (m) { return marketProduct(m.code).length || marketBlockers(m.code).length; })
+        .map(function (m) { return [m.code, m.name]; }))) +
+    sel('df-band', df.band, [['', 'All urgency'], ['now', 'Now'], ['soon', 'Soon'], ['watch', 'Watch']]) +
+    sel('df-sort', df.sort, [['urgency', 'Sort: urgency'], ['due', 'Sort: due date'], ['market', 'Sort: market'], ['title', 'Sort: A–Z']]) +
+    '<input type="search" id="df-q" placeholder="Search…" value="' + esc(df.q) + '">' +
+    (df.market || df.band || df.q ? '<button class="btn btn-sm" data-act="df-clear">Clear</button>' : '') +
+    '<span class="spacer"></span>' +
+    '<span class="src">Urgency = SEO impact + delivery status + how close the due date is</span></div>';
 
-  h += '<div class="card"><div class="card-head"><h2>Flag to markets</h2>' +
-    '<span class="sub">Standards out</span></div>';
-  if (!flagM.length && !bM.length) h += '<div class="empty"><strong>Nothing waiting</strong>Everything current has been cascaded.</div>';
-  else {
-    h += '<ul class="list-plain">';
-    flagM.slice(0, 8).forEach(function (p) {
-      h += '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '">' +
-        '<div class="li-top"><span class="t">' + esc(p.title) + '</span>' +
-        '<span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + esc(p.seo) + ' SEO impact</span></div>' +
-        '<div class="li-sub">' + esc(p.id) + ' · ' + esc(p.toMarkets.slice(0, 130)) + (p.toMarkets.length > 130 ? '…' : '') + '</div></li>';
-    });
-    bM.slice(0, 5).forEach(function (b) {
-      h += '<li class="clickable" data-open="blocker" data-id="' + esc(b.id) + '">' +
-        '<div class="li-top"><span class="t">' + esc(b.title) + '</span>' +
-        '<span class="pill ' + (PRIO[b.priority] || 'ghost') + '">' + esc(b.priority) + '</span></div>' +
-        '<div class="li-sub">Blocker · ' + b.markets.map(esc).join(', ') + ' — markets not briefed</div></li>';
-    });
-    var moreM = Math.max(0, flagM.length - 8) + Math.max(0, bM.length - 5);
-    if (moreM) h += '<li class="src">' + moreM + ' more — see the <a href="#/product">product radar</a> and <a href="#/blockers">blockers</a></li>';
-    h += '</ul>';
-  }
-  h += '</div>';
-
-  h += '<div class="card"><div class="card-head"><h2>Raise with product</h2>' +
-    '<span class="sub">Requirements in</span></div>';
-  if (!flagP.length && !bP.length) h += '<div class="empty"><strong>Nothing waiting</strong>No open asks for the product team.</div>';
-  else {
-    h += '<ul class="list-plain">';
-    flagP.slice(0, 8).forEach(function (p) {
-      h += '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '">' +
-        '<div class="li-top"><span class="t">' + esc(p.title) + '</span>' +
-        '<span class="pill ' + (STAT[p.status] || 'ghost') + '">' + esc(p.status) + '</span></div>' +
-        '<div class="li-sub">' + esc(p.id) + ' · ' + esc(p.toProduct.slice(0, 130)) + (p.toProduct.length > 130 ? '…' : '') + '</div></li>';
-    });
-    bP.forEach(function (b) {
-      h += '<li class="clickable" data-open="blocker" data-id="' + esc(b.id) + '">' +
-        '<div class="li-top"><span class="t">' + esc(b.title) + '</span>' +
-        '<span class="pill ' + (PRIO[b.priority] || 'ghost') + '">' + esc(b.priority) + '</span></div>' +
-        '<div class="li-sub">Blocker · ' + b.markets.map(esc).join(', ') + ' — ' + esc(b.nextStep.slice(0, 110)) + '</div></li>';
-    });
-    if (flagP.length > 8) h += '<li class="src">' + (flagP.length - 8) + ' more — see the <a href="#/product">product radar</a></li>';
-    h += '</ul>';
-  }
-  h += '</div></div>';
+  h += '<div class="grid g-2">' +
+    laneCard('markets', 'Flag to markets', 'standards out') +
+    laneCard('product', 'Raise with product', 'requirements in') +
+    '</div>';
 
   /* Milestones + cadence */
   h += '<div class="section grid g-side">';
@@ -398,6 +398,8 @@ function selN(name, val, opts) {
 function viewMarkets() {
   var h = '<div class="page-head"><div class="eyebrow">Market side</div><h1>Markets</h1>' +
     '<p>One row per market: where One AZ adoption stands, what is running, what is blocked, and whether the blockers have been communicated. Click a row for the full market view.</p></div>';
+  h += '<div class="filters"><button class="btn btn-sm btn-primary">List</button>' +
+    '<a class="btn btn-sm" href="#/map">Map</a></div>';
 
   var groups = {};
   S.markets.forEach(function (m) { (groups[m.cluster] = groups[m.cluster] || []).push(m); });
@@ -432,9 +434,11 @@ function viewMarket(code) {
   var dl = marketDeliverables(code), bl = marketBlockers(code), pj = marketProjects(code), pr = marketProduct(code);
   var st = ONEAZ[m.oneAz] || ['ghost', m.oneAz];
 
-  var h = '<div class="page-head"><div class="eyebrow"><a href="#/markets">Markets</a> · ' + esc(m.cluster) + '</div>' +
-    '<h1>' + esc(m.name) + ' <span class="pill ' + st[0] + '" style="vertical-align:6px">' + esc(st[1]) + '</span></h1>' +
-    '<p>' + esc(m.headline) + '</p></div>';
+  var h = '<div class="page-head"><div class="eyebrow"><a href="#/markets">Markets</a> · <a href="#/map">Map</a> · ' + esc(m.cluster) + '</div>' +
+    '<div class="li-top" style="align-items:flex-start"><h1 style="margin:0 0 4px">' + esc(m.name) +
+    ' <span class="pill ' + st[0] + '" style="vertical-align:6px">' + esc(st[1]) + '</span></h1>' +
+    '<button class="btn btn-sm" data-act="edit-market" data-id="' + esc(code) + '">Edit market</button></div>' +
+    '<p>' + esc(m.headline) + '</p>' + (m.notes ? '<div class="note-box" style="margin-top:10px">' + esc(m.notes) + '</div>' : '') + '</div>';
 
   h += '<div class="grid g-4">' +
     '<div class="card stat"><div class="k num">' + dl.length + '</div><div class="l">Deliverables logged</div></div>' +
@@ -462,6 +466,20 @@ function viewMarket(code) {
     h += '</ul>';
   }
   h += '</div>';
+
+  /* market plan — gantt across every project touching this market */
+  var mt = [];
+  pj.forEach(function (p) {
+    (window.DATA_VIEWS.projectTasks[p.id] || []).forEach(function (t) {
+      mt.push({ name: t.name, start: t.start, end: t.end, owner: t.owner, status: t.status,
+        lane: (p.market === 'ALL' ? '◇ ' : '') + p.name.split(' —')[0] });
+    });
+  });
+  if (mt.length) {
+    h += '<div class="card" style="margin-top:14px"><div class="card-head"><h2>Plan</h2>' +
+      '<span class="sub">Every project touching this market, on one timeline</span></div>' +
+      '<div class="card-pad">' + gantt(mt, 'Task') + '</div></div>';
+  }
 
   /* blockers */
   h += '<div class="card" style="margin-top:14px"><div class="card-head"><h2>Blockers and limitations</h2>' +
@@ -733,6 +751,11 @@ function drawerProject(id) {
     h += '</tbody></table>';
   }
 
+  var gt = window.DATA_VIEWS.projectTasks[p.id];
+  if (gt && gt.length) {
+    h += '<div class="divider"></div><div class="eyebrow">Timeline</div>' + gantt(gt, 'Task');
+  }
+
   if (p.raci && p.raci.length) {
     h += '<div class="divider"></div><div class="eyebrow">RACI</div><div class="tbl-wrap"><table class="tbl" style="font-size:12px"><thead><tr><th>Task</th>' +
       p.raciCols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr></thead><tbody>';
@@ -889,7 +912,9 @@ function viewPeople() {
     'Overdue is measured against the cadence you set, not a fixed rule.</p></div>';
 
   var sides = [['product', 'Product side'], ['programme', 'Programme and Web Delivery'], ['seo', 'SEO team'], ['market', 'Markets']];
-  h += '<div class="btn-row" style="margin-bottom:14px"><button class="btn btn-primary btn-sm" data-act="new-person">+ Add a stakeholder</button></div>';
+  h += '<div class="filters"><button class="btn btn-sm btn-primary">People</button>' +
+    '<a class="btn btn-sm" href="#/cal">Calendar</a><span class="spacer"></span>' +
+    '<button class="btn btn-primary btn-sm" data-act="new-person">+ Add a stakeholder</button></div>';
 
   sides.forEach(function (sd) {
     var list = S.stakeholders.filter(function (p) { return p.side === sd[0]; });
@@ -1097,6 +1122,27 @@ function viewData() {
     '<p>Everything lives in this browser\'s local storage on this machine. Nothing is sent anywhere. ' +
     'Export a JSON backup before you change browsers or clear site data.</p></div>';
 
+  h += '<div class="card card-pad" style="margin-bottom:16px">' +
+    '<div class="li-top"><h2 style="margin:0;font-size:14px">Server sync</h2>' +
+    '<span class="pill ' + (window.SYNC && SYNC.state.on ? 'ok' : 'ghost') + '">' +
+    (window.SYNC && SYNC.state.on ? 'on' : 'off') + '</span></div>' +
+    '<div class="src" id="sync-line" style="margin:8px 0 12px">' + esc(syncLine()) + '</div>' +
+    (window.SYNC && SYNC.available()
+      ? '<div class="field-row" style="align-items:flex-end">' +
+        '<div class="field" style="margin:0"><label>Desk key</label>' +
+        '<input type="password" id="sync-key" value="' + esc(window.SYNC.state.key) + '" placeholder="the DESK_KEY set on the deployment"></div>' +
+        '<div class="btn-row" style="padding-bottom:1px">' +
+        '<button class="btn btn-primary btn-sm" data-act="sync-connect">Connect</button>' +
+        '<button class="btn btn-sm" data-act="sync-pull">Pull from server</button>' +
+        '<button class="btn btn-sm" data-act="sync-push">Push to server</button>' +
+        '<button class="btn btn-ghost btn-sm" data-act="sync-off">Disconnect</button>' +
+        '</div></div>' +
+        '<div class="src" style="margin-top:10px">The key never leaves this browser except as a request header to your own deployment. ' +
+        'Pull replaces what is in this browser with the server copy; push does the reverse.</div>'
+      : '<div class="note-box">You are running from a local file, so there is nothing to sync to. ' +
+        'Deploy the same folder to Vercel and open it there to turn this on.</div>') +
+    '</div>';
+
   h += '<div class="grid g-2"><div class="card card-pad"><h2 style="margin:0 0 8px;font-size:14px">Backup and restore</h2>' +
     '<div class="btn-row"><button class="btn btn-primary" data-act="export">Export JSON backup</button>' +
     '<label class="btn">Import backup<input type="file" id="import-file" accept="application/json" hidden></label></div>' +
@@ -1123,6 +1169,957 @@ function viewData() {
   return h;
 }
 
+/* ===================================================== SHARED: GANTT */
+var GSTAT = { done: 'ok', active: 'warn', todo: 'ghost', blocked: 'risk' };
+function monthsBetween(a, b) {
+  var out = [], d = new Date(a.slice(0, 7) + '-01T00:00:00Z');
+  var end = new Date(b.slice(0, 7) + '-01T00:00:00Z');
+  while (d <= end) { out.push(d.toISOString().slice(0, 7)); d.setUTCMonth(d.getUTCMonth() + 1); }
+  return out;
+}
+function gantt(tasks, title) {
+  tasks = (tasks || []).filter(function (t) { return t.start && t.end; });
+  if (!tasks.length) return '<div class="empty">No dated tasks on this one yet.</div>';
+  var min = tasks.reduce(function (m, t) { return t.start < m ? t.start : m; }, tasks[0].start);
+  var max = tasks.reduce(function (m, t) { return t.end > m ? t.end : m; }, tasks[0].end);
+  var months = monthsBetween(min, max);
+  var t0 = Date.parse(months[0] + '-01');
+  var lastM = months[months.length - 1].split('-');
+  var t1 = Date.UTC(+lastM[0], +lastM[1], 1);
+  var span = t1 - t0;
+  function pct(d) { return Math.max(0, Math.min(100, (Date.parse(d) - t0) / span * 100)); }
+
+  var lanes = [], byLane = {};
+  tasks.forEach(function (t) {
+    var l = t.lane || 'Tasks';
+    if (!byLane[l]) { byLane[l] = []; lanes.push(l); }
+    byLane[l].push(t);
+  });
+
+  var MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var h = '<div class="gantt-wrap"><div class="gantt" style="min-width:' + Math.max(680, months.length * 78) + 'px">';
+  h += '<div class="g-head"><div class="g-lbl">' + esc(title || 'Task') + '</div><div class="g-track">' +
+    months.map(function (m) {
+      var p = m.split('-');
+      return '<div class="g-mon">' + MN[+p[1] - 1] + ' <span>' + p[0].slice(2) + '</span></div>';
+    }).join('') +
+    (TODAY >= min.slice(0, 7) + '-01' && TODAY <= max ? '<div class="g-now" style="left:' + pct(TODAY) + '%"><span>today</span></div>' : '') +
+    '</div></div>';
+
+  lanes.forEach(function (l) {
+    h += '<div class="g-lane"><div class="g-lbl g-lane-name">' + esc(l) + '</div><div class="g-track"></div></div>';
+    byLane[l].forEach(function (t) {
+      var a = pct(t.start), b = pct(t.end);
+      h += '<div class="g-row"><div class="g-lbl" title="' + esc(t.name) + '">' + esc(t.name) +
+        '<span class="g-own">' + esc(t.owner || '') + '</span></div>' +
+        '<div class="g-track">' +
+        months.map(function () { return '<div class="g-cell"></div>'; }).join('') +
+        '<div class="g-bar ' + (t.status || 'todo') + '" style="left:' + a + '%;width:' + Math.max(1.2, b - a) + '%" ' +
+        'title="' + esc(fmt(t.start) + ' → ' + fmt(t.end)) + '"></div>' +
+        (TODAY >= min.slice(0, 7) + '-01' && TODAY <= max ? '<div class="g-now" style="left:' + pct(TODAY) + '%"></div>' : '') +
+        '</div></div>';
+    });
+  });
+  h += '</div></div>';
+  h += '<div class="btn-row" style="margin-top:10px">' +
+    [['done', 'Done'], ['active', 'In flight'], ['todo', 'Not started'], ['blocked', 'Blocked']].map(function (s) {
+      return '<span class="pill ' + GSTAT[s[0]] + '">' + s[1] + '</span>';
+    }).join('') + '</div>';
+  return h;
+}
+
+/* ================================================== URGENCY / SORTING */
+function urgencyOf(p) {
+  var s = { high: 3, medium: 2, low: 1 }[p.seo] || 1;
+  if (p.status === 'blocked' || p.status === 'at-risk') s += 1;
+  var d = p.due ? daysUntil(p.due) : null;
+  if (d !== null) { if (d < 0) s += 2; else if (d <= 14) s += 1; }
+  return s;
+}
+function bandOf(n) { return n >= 5 ? 'now' : n >= 3 ? 'soon' : 'watch'; }
+function blockerBand(b) {
+  var d = b.targetDate ? daysUntil(b.targetDate) : null;
+  if (b.priority === 'Critical') return 'now';
+  if (b.priority === 'High') return (d !== null && d < 0) ? 'now' : 'soon';
+  return (d !== null && d < 0) ? 'soon' : 'watch';
+}
+var BAND = { now: ['risk', 'Now'], soon: ['warn', 'Soon'], watch: ['ghost', 'Watch'] };
+
+/* ==================================================== DASHBOARD LANES */
+var df = { market: '', band: '', q: '', sort: 'urgency' };
+
+function laneRows(dir) {
+  var out = [];
+  S.product.forEach(function (p) {
+    if (dir === 'markets' ? !needsMarkets(p) : !needsProduct(p)) return;
+    out.push({
+      kind: 'product', id: p.id, title: p.title, ref: p.id,
+      sub: dir === 'markets' ? p.toMarkets : p.toProduct,
+      markets: p.markets, band: bandOf(urgencyOf(p)), score: urgencyOf(p),
+      due: p.due || '', tag: p.seo + ' impact', tagCls: SEV[p.seo] || 'ghost'
+    });
+  });
+  S.blockers.forEach(function (b) {
+    if (b.status === 'Closed') return;
+    if (dir === 'markets' ? !blockerNeedsMarkets(b) : !blockerNeedsProduct(b)) return;
+    out.push({
+      kind: 'blocker', id: b.id, title: b.title, ref: b.topic,
+      sub: dir === 'markets' ? b.description : b.nextStep,
+      markets: b.markets, band: blockerBand(b), score: { Critical: 6, High: 4, Medium: 2, Low: 1 }[b.priority] || 1,
+      due: b.targetDate || '', tag: b.priority, tagCls: PRIO[b.priority] || 'ghost'
+    });
+  });
+  return out.filter(function (r) {
+    if (df.market && r.markets.indexOf(df.market) < 0 && r.markets.indexOf('ALL') < 0) return false;
+    if (df.band && r.band !== df.band) return false;
+    if (df.q) {
+      var t = (r.title + ' ' + r.ref + ' ' + r.sub + ' ' + r.markets.join(' ')).toLowerCase();
+      if (t.indexOf(df.q.toLowerCase()) < 0) return false;
+    }
+    return true;
+  }).sort(function (a, b) {
+    if (df.sort === 'due') {
+      var ad = a.due || '9999', bd = b.due || '9999';
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      return b.score - a.score;
+    }
+    if (df.sort === 'market') {
+      var am = a.markets[0] || 'zz', bm = b.markets[0] || 'zz';
+      if (am !== bm) return am < bm ? -1 : 1;
+      return b.score - a.score;
+    }
+    if (df.sort === 'title') return a.title < b.title ? -1 : 1;
+    return b.score - a.score;
+  });
+}
+
+function laneCard(dir, heading, note) {
+  var rows = laneRows(dir);
+  var h = '<div class="card"><div class="card-head"><h2>' + esc(heading) + '</h2>' +
+    '<span class="sub">' + rows.length + ' item' + (rows.length === 1 ? '' : 's') + ' · ' + esc(note) + '</span></div>';
+  if (!rows.length) h += '<div class="empty"><strong>Nothing waiting</strong>Nothing matches, or everything current has been handled.</div>';
+  else {
+    h += '<ul class="list-plain">';
+    rows.forEach(function (r) {
+      h += '<li class="clickable" data-open="' + esc(r.kind) + '" data-id="' + esc(r.id) + '">' +
+        '<div class="li-top"><span class="t">' + esc(r.title) + '</span>' +
+        '<span class="nowrap"><span class="pill ' + BAND[r.band][0] + '">' + BAND[r.band][1] + '</span>' +
+        '<span class="pill ' + r.tagCls + '">' + esc(r.tag) + '</span></span></div>' +
+        '<div class="li-sub"><span class="mono">' + esc(r.ref) + '</span> · ' +
+        esc(r.markets.map(function (c) { return c === 'ALL' ? 'all' : c; }).join(', ')) +
+        (r.due ? ' · due ' + fmt(r.due) : '') + '<br>' + esc(String(r.sub).slice(0, 150)) + (String(r.sub).length > 150 ? '…' : '') +
+        '</div></li>';
+    });
+    h += '</ul>';
+  }
+  return h + '</div>';
+}
+
+/* ========================================================= PRODUCT MAP */
+var pmSel = '';
+function viewProductMap() {
+  var V = window.DATA_VIEWS;
+  var h = '<div class="page-head"><div class="eyebrow">Product side · orientation</div>' +
+    '<h1>What the product actually is</h1>' +
+    '<p>The One AZ product surface grouped the way it matters to us, not the way the backlog is organised. ' +
+    'Nine categories; the ones marked <span class="pill risk">core</span> are where our standard is decided, ' +
+    '<span class="pill warn">watch</span> can undo our work if it ships unreviewed, ' +
+    '<span class="pill ghost">light</span> is worth knowing and rarely worth intervening in.</p></div>';
+
+  var CARE = { core: 'risk', watch: 'warn', light: 'ghost' };
+
+  /* category grid */
+  h += '<div class="grid g-3">';
+  V.categories.forEach(function (c) {
+    var items = S.product.filter(function (p) { return (V.itemCat[p.id] || [])[0] === c.id; });
+    var hi = items.filter(function (p) { return p.seo === 'high'; }).length;
+    var due = items.filter(function (p) { return needsMarkets(p) || needsProduct(p); }).length;
+    h += '<div class="card pm-cat clickable" data-pmcat="' + esc(c.id) + '">' +
+      '<div class="card-pad">' +
+      '<div class="li-top" style="align-items:flex-start"><div><span class="pm-icon">' + c.icon + '</span> ' +
+      '<strong style="font-size:14px">' + esc(c.title) + '</strong></div>' +
+      '<span class="pill ' + CARE[c.care] + '">' + c.care + '</span></div>' +
+      '<div class="src" style="margin:8px 0 10px;line-height:1.55">' + esc(c.blurb) + '</div>' +
+      '<div class="btn-row"><span class="pill ghost">' + items.length + ' items</span>' +
+      (hi ? '<span class="pill risk">' + hi + ' high impact</span>' : '') +
+      (due ? '<span class="pill accent">' + due + ' to action</span>' : '') + '</div>' +
+      '</div></div>';
+  });
+  h += '</div>';
+
+  /* selected category detail */
+  if (pmSel) {
+    var c = null;
+    V.categories.forEach(function (x) { if (x.id === pmSel) c = x; });
+    if (c) {
+      h += '<div class="section"><div class="card"><div class="card-head"><h2>' + c.icon + '&nbsp; ' + esc(c.title) + '</h2>' +
+        '<button class="btn btn-ghost btn-sm" data-pmcat="">Close</button></div>' +
+        '<div class="card-pad">' +
+        '<div class="note-box"><strong>Why this matters to us.</strong> ' + esc(c.stake) + '</div>' +
+        '<div class="grid g-3" style="margin-top:14px">' +
+        c.subs.map(function (s) {
+          var its = S.product.filter(function (p) { return (V.itemCat[p.id] || [])[1] === s.id; });
+          return '<div class="card card-pad" style="box-shadow:none;background:var(--surface-2)">' +
+            '<div class="li-top"><strong style="font-size:13px">' + esc(s.title) + '</strong>' +
+            '<span class="pill ' + CARE[s.care] + '">' + s.care + '</span></div>' +
+            '<div class="src" style="margin:6px 0 9px">' + esc(s.note) + '</div>' +
+            (its.length ? '<ul class="list-plain" style="border-top:1px solid var(--line)">' + its.map(function (p) {
+              return '<li class="clickable" style="padding:8px 0" data-open="product" data-id="' + esc(p.id) + '">' +
+                '<div style="font-size:12.5px;font-weight:550">' + esc(p.title) + '</div>' +
+                '<div class="src mono">' + esc(p.id) + ' · <span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + p.seo + '</span></div></li>';
+            }).join('') + '</ul>' : '<div class="src">Nothing logged here yet.</div>') +
+            '</div>';
+        }).join('') +
+        '</div></div></div></div>';
+    }
+  }
+
+  /* page anatomy */
+  h += '<div class="section"><h2>Where it lands on the page</h2>' +
+    '<p class="src" style="max-width:74ch;margin:-6px 0 14px">A One AZ HCP page, region by region. Click a region to see what product work touches it and which checklist items apply. ' +
+    'This is the translation layer: product tickets on one side, the page a crawler actually fetches on the other.</p>';
+
+  h += '<div class="grid g-side">';
+  h += '<div class="card card-pad"><div class="wire">' +
+    wireRegion('utility', 'Utility nav', 1, 'wr-utility') +
+    wireRegion('topnav', 'Top navigation · max 7 tabs', 2, 'wr-topnav') +
+    wireRegion('breadcrumb', 'Breadcrumb', 3, 'wr-crumb') +
+    wireRegion('hero', 'H1 + intro — the teaser layer', 4, 'wr-hero') +
+    wireRegion('tabs', 'In-page tabs · max 7', 5, 'wr-tabs') +
+    '<div class="wr-split">' +
+    wireRegion('body', 'Body content chunks', 6, 'wr-body') +
+    '<div class="wr-side">' +
+    wireRegion('media', 'Media', 7, 'wr-media') +
+    wireRegion('perso', 'Personalisation', 8, 'wr-perso') +
+    '</div></div>' +
+    wireRegion('gate', 'The gated boundary — login / 302', 9, 'wr-gate') +
+    wireRegion('mandatory', 'Mandatory local text', 10, 'wr-mand') +
+    wireRegion('head', 'The invisible layer — head, schema, robots, sitemap', 11, 'wr-head') +
+    '</div></div>';
+
+  var sel = null;
+  V.anatomy.forEach(function (a) { if (a.id === pmZone) sel = a; });
+  h += '<div>';
+  if (!sel) {
+    h += '<div class="card card-pad"><div class="eyebrow">Page anatomy</div>' +
+      '<p style="font-size:13px;line-height:1.6;margin:6px 0 0">Pick a region on the wireframe. Each one lists the product items that can change it and the checklist questions to ask before it ships.</p>' +
+      '<div class="divider"></div><div class="src">Regions marked in the strong colour are ones where our standard is decided. The dashed band is the login boundary — everything above it is what a crawler is served.</div></div>';
+  } else {
+    h += '<div class="card"><div class="card-head"><h2>' + sel.n + '. ' + esc(sel.label) + '</h2>' +
+      '<span class="pill ' + CARE[sel.care] + '">' + sel.care + '</span></div><div class="card-pad">' +
+      '<div class="src" style="line-height:1.6">' + esc(sel.what) + '</div>' +
+      '<div class="note-box" style="margin-top:12px"><strong>SEO / GEO read.</strong> ' + esc(sel.seo) + '</div>';
+    var its = sel.items.map(function (i) { return byId(S.product, i); }).filter(Boolean);
+    if (its.length) {
+      h += '<div class="divider"></div><div class="eyebrow">Product items here</div><ul class="list-plain">' +
+        its.map(function (p) {
+          return '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '" style="padding:9px 0">' +
+            '<div style="font-size:13px;font-weight:550">' + esc(p.title) + '</div>' +
+            '<div class="src mono">' + esc(p.id) + ' · <span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + p.seo + '</span></div></li>';
+        }).join('') + '</ul>';
+    }
+    var C = window.CHECKLIST, qs = [];
+    C.groups.forEach(function (g) { g.items.forEach(function (it) { if (sel.check.indexOf(it.id) >= 0) qs.push(it); }); });
+    if (qs.length) {
+      h += '<div class="divider"></div><div class="eyebrow">Ask before it ships</div>' +
+        '<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px;line-height:1.6">' +
+        qs.map(function (q) { return '<li>' + esc(q.q) + ' <span class="pill ' + (q.w === 'must' ? 'risk' : 'ghost') + '">' + q.w + '</span>' + (q.geo ? ' <span class="pill teal">GEO</span>' : '') + '</li>'; }).join('') +
+        '</ul>';
+    }
+    h += '</div></div>';
+  }
+  h += '</div></div></div>';
+  return h;
+}
+var pmZone = '';
+function wireRegion(id, label, n, cls) {
+  var V = window.DATA_VIEWS, care = 'light';
+  V.anatomy.forEach(function (a) { if (a.id === id) care = a.care; });
+  return '<div class="wr ' + cls + ' care-' + care + (pmZone === id ? ' on' : '') + '" data-zone="' + esc(id) + '">' +
+    '<span class="wr-n">' + n + '</span><span class="wr-t">' + esc(label) + '</span></div>';
+}
+
+/* ============================================================ MAP VIEW */
+function viewMap() {
+  var V = window.DATA_VIEWS;
+  var W = 760, H = 560, lon0 = -12, lon1 = 31, lat0 = 34.5, lat1 = 62.5;
+  var kx = Math.cos((lat0 + lat1) / 2 * Math.PI / 180);
+  function X(lon) { return (lon - lon0) / (lon1 - lon0) * W; }
+  function Y(lat) { return H - (lat - lat0) / (lat1 - lat0) * H; }
+
+  var FILL = { implemented: 'var(--ok)', 'in-process': 'var(--warn)', proposed: 'var(--info)',
+    'not-started': 'var(--risk)', baseline: 'var(--faint)', watch: 'var(--info)', 'out-of-scope': 'var(--line-strong)' };
+
+  var pts = [];
+  S.markets.forEach(function (m) {
+    var g = V.geo[m.code]; if (!g) return;
+    var dl = marketDeliverables(m.code).length;
+    var bl = marketBlockers(m.code).filter(function (b) { return b.status !== 'Closed' && b.markets.indexOf(m.code) >= 0; }).length;
+    pts.push({ m: m, x: X(g[1]) + (g[2] || 0), y: Y(g[0]) + (g[3] || 0),
+      r: Math.max(9, Math.min(30, 7 + Math.sqrt(dl) * 3.1)), dl: dl, bl: bl });
+  });
+  pts.sort(function (a, b) { return b.r - a.r; });
+
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" class="euromap" role="img" aria-label="Schematic map of EUCAN markets">';
+  for (var lg = -10; lg <= 30; lg += 10) svg += '<line x1="' + X(lg) + '" y1="0" x2="' + X(lg) + '" y2="' + H + '" class="grat"/>';
+  for (var lt = 35; lt <= 60; lt += 5) svg += '<line x1="0" y1="' + Y(lt) + '" x2="' + W + '" y2="' + Y(lt) + '" class="grat"/>';
+
+  pts.forEach(function (p) {
+    var st = ONEAZ[p.m.oneAz] || ['ghost', p.m.oneAz];
+    svg += '<g class="mk' + (p.bl ? ' has-bl' : '') + '" data-open="market" data-id="' + esc(p.m.code) + '">' +
+      '<title>' + esc(p.m.name + ' — ' + st[1] + ' · ' + p.dl + ' deliverables' + (p.bl ? ' · ' + p.bl + ' open blockers' : '')) + '</title>' +
+      '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + p.r.toFixed(1) + '" fill="' + FILL[p.m.oneAz] + '" class="mk-c"/>' +
+      (p.bl ? '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + (p.r + 4).toFixed(1) + '" class="mk-ring"/>' : '') +
+      '<text x="' + p.x.toFixed(1) + '" y="' + (p.y + 3.6).toFixed(1) + '" class="mk-lbl">' + esc(p.m.code) + '</text>' +
+      '</g>';
+  });
+  svg += '</svg>';
+
+  var h = '<div class="filters" style="margin-bottom:14px">' +
+    '<a class="btn btn-sm" href="#/markets">List</a>' +
+    '<button class="btn btn-sm btn-primary">Map</button>' +
+    '<span class="spacer"></span>' +
+    '<span class="src">Bubble size = deliverables logged · fill = One AZ status · ring = open market-specific blockers</span></div>';
+
+  h = '<div class="page-head"><div class="eyebrow">Market side</div><h1>Map</h1>' +
+    '<p>Click a market to open it. Positions are approximate capital coordinates — a schematic for navigation, not a survey.</p></div>' + h;
+
+  h += '<div class="grid g-side"><div class="card card-pad">' + svg + '</div>';
+
+  h += '<div><div class="card card-pad"><div class="eyebrow">One AZ status</div>' +
+    Object.keys(ONEAZ).map(function (k) {
+      var n = S.markets.filter(function (m) { return m.oneAz === k && V.geo[m.code]; }).length;
+      if (!n) return '';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px">' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + FILL[k] + ';flex:0 0 auto"></span>' +
+        esc(ONEAZ[k][1]) + '<span class="src" style="margin-left:auto">' + n + '</span></div>';
+    }).join('') + '</div>';
+
+  h += '<div class="card card-pad" style="margin-top:14px"><div class="eyebrow">Off the map</div>' +
+    V.offMap.map(function (c) {
+      var m = byId2(S.markets, c); if (!m) return '';
+      return '<div class="clickable" data-open="market" data-id="' + esc(c) + '" style="padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer">' +
+        '<div style="font-weight:600;font-size:13px">' + esc(m.name) + '</div>' +
+        '<div class="src">' + esc((ONEAZ[m.oneAz] || ['', m.oneAz])[1]) + ' · ' + marketDeliverables(c).length + ' deliverables</div></div>';
+    }).join('') + '</div>';
+
+  h += '<div class="card card-pad" style="margin-top:14px"><div class="eyebrow">Clusters</div>' +
+    window.DATA_CORE.clusters.map(function (cl) {
+      var ms = S.markets.filter(function (m) { return m.cluster === cl; });
+      if (!ms.length) return '';
+      return '<div style="padding:7px 0;border-bottom:1px solid var(--line)"><div style="font-weight:600;font-size:12.5px">' + esc(cl) + '</div>' +
+        '<div class="src mono">' + ms.map(function (m) { return m.code; }).join(' · ') + '</div></div>';
+    }).join('') + '</div></div></div>';
+  return h;
+}
+
+/* ============================================================= PAYWALL */
+function viewPaywall() {
+  var P = window.DATA_VIEWS.paywall;
+  var proj = byId(S.projects, 'p-paywall-ch');
+  var h = '<div class="page-head"><div class="eyebrow">Programme</div><h1>Paywall</h1>' +
+    '<p>' + esc(P.model) + '</p></div>';
+
+  h += '<div class="grid g-4">' +
+    '<div class="card stat"><div class="k num">1</div><div class="l">Live pilot</div><div class="f">Switzerland — Trixeo DE and FR</div></div>' +
+    '<div class="card stat"><div class="k num">39x</div><div class="l">Organic clicks, Canada</div><div class="f">7 → 280 on 25 brand pages</div></div>' +
+    '<div class="card stat"><div class="k num">5–8</div><div class="l">Pages per 3-week cycle</div><div class="f">Confirmed by batch 1</div></div>' +
+    '<div class="card stat alert"><div class="k num">' + fmt('2026-09-08') + '</div><div class="l">Next gate</div><div class="f">Compliance and SLT meeting</div></div>' +
+    '</div>';
+
+  h += '<div class="section"><h2>The five-stage service</h2><div class="grid g-3">' +
+    P.stages.map(function (s) {
+      return '<div class="card card-pad"><div class="eyebrow">Stage ' + s.n + '</div>' +
+        '<div style="font-weight:600;margin-bottom:6px">' + esc(s.title) + '</div>' +
+        '<div class="src" style="line-height:1.55">' + esc(s.what) + '</div></div>';
+    }).join('') + '</div></div>';
+
+  h += '<div class="section grid g-2">' +
+    '<div class="card card-pad"><div class="eyebrow">Page audit — five scoring criteria</div><ol style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.7">' +
+    P.criteria.map(function (c) { return '<li>' + esc(c) + '</li>'; }).join('') + '</ol></div>' +
+    '<div class="card card-pad"><div class="eyebrow">Batch types</div>' +
+    P.batchTypes.map(function (b) {
+      return '<div style="padding:8px 0;border-bottom:1px solid var(--line)"><div style="font-weight:600;font-size:13px">' + esc(b.k) + '</div>' +
+        '<div class="src">' + esc(b.v) + '</div></div>';
+    }).join('') + '</div></div>';
+
+  h += '<div class="section"><h2>Switzerland — delivery plan</h2>' +
+    '<div class="card card-pad">' + gantt(window.DATA_VIEWS.projectTasks['p-paywall-ch'], 'Task') +
+    '<div class="note-box warn" style="margin-top:14px"><strong>Dates shift together.</strong> If the September compliance meeting moves, everything after it moves by the same number of days.</div>' +
+    '</div></div>';
+
+  h += '<div class="section"><h2>Markets</h2>' +
+    '<p class="src" style="max-width:74ch;margin:-6px 0 12px">' + esc(P.scopeNote) + '</p>' +
+    '<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Market</th><th>State</th><th>Where it stands</th><th>Owner</th></tr></thead><tbody>';
+  P.markets.forEach(function (m) {
+    var cls = m.state === 'live-pilot' ? 'accent' : m.state === 'precedent' ? 'ok' : m.state === 'candidate' ? 'info' : 'ghost';
+    h += '<tr class="clickable" data-open="market" data-id="' + esc(m.code) + '">' +
+      '<td class="nowrap"><div class="t">' + esc(marketName(m.code)) + '</div><div class="d mono">' + esc(m.code) + '</div></td>' +
+      '<td><span class="pill ' + cls + '">' + esc(m.label) + '</span></td>' +
+      '<td>' + esc(m.note) + '</td>' +
+      '<td class="src nowrap">' + esc(m.owner) + '</td></tr>';
+  });
+  h += '</tbody></table></div></div></div>';
+
+  if (proj && proj.raci && proj.raci.length) {
+    h += '<div class="section"><h2>Ownership</h2><div class="card"><div class="tbl-wrap"><table class="tbl" style="font-size:12px"><thead><tr><th>Task</th>' +
+      proj.raciCols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    proj.raci.forEach(function (r) {
+      h += '<tr><td>' + esc(r[0]) + '</td>' + r.slice(1).map(function (v) {
+        var cls = v === 'R,A' || v === 'A' ? 'accent' : v === 'R' ? 'info' : v === 'C' ? 'warn' : 'ghost';
+        return '<td class="nowrap">' + (v === '—' ? '<span class="src">—</span>' : '<span class="pill ' + cls + '">' + esc(v) + '</span>') + '</td>';
+      }).join('') + '</tr>';
+    });
+    h += '</tbody></table></div></div></div>';
+  }
+
+  h += '<div class="section"><div class="note-box warn"><strong>Phase 2 — to be confirmed.</strong> ' + esc(P.phase2) + '</div></div>';
+  return h;
+}
+
+/* ============================================================ CALENDAR */
+var calMonth = TODAY.slice(0, 7);
+function viewCalendar() {
+  var h = '<div class="page-head"><div class="eyebrow">Connect tracker</div><h1>Calendar</h1>' +
+    '<p>Meetings, connects, emails and deadlines, with the next steps that came out of each. ' +
+    'Project milestones and blocker target dates are laid in automatically.</p></div>';
+
+  h += '<div class="filters">' +
+    '<a class="btn btn-sm" href="#/people">People</a>' +
+    '<button class="btn btn-sm btn-primary">Calendar</button>' +
+    '<span class="spacer"></span>' +
+    '<button class="btn btn-sm" data-cal="prev">‹ Prev</button>' +
+    '<strong style="min-width:140px;text-align:center">' + monthName(calMonth) + '</strong>' +
+    '<button class="btn btn-sm" data-cal="next">Next ›</button>' +
+    '<button class="btn btn-sm" data-cal="today">Today</button>' +
+    '<button class="btn btn-primary btn-sm" data-act="new-event">+ Add</button></div>';
+
+  /* build the month grid */
+  var y = +calMonth.slice(0, 4), mo = +calMonth.slice(5, 7);
+  var first = new Date(Date.UTC(y, mo - 1, 1));
+  var startDow = (first.getUTCDay() + 6) % 7;               /* Monday first */
+  var days = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  var cells = [];
+  for (var i = 0; i < startDow; i++) cells.push(null);
+  for (var d = 1; d <= days; d++) cells.push(calMonth + '-' + String(d).padStart(2, '0'));
+  while (cells.length % 7) cells.push(null);
+
+  var auto = autoDates();
+  h += '<div class="card card-pad"><div class="cal">' +
+    ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(function (d) { return '<div class="cal-h">' + d + '</div>'; }).join('');
+  cells.forEach(function (date) {
+    if (!date) { h += '<div class="cal-d empty-d"></div>'; return; }
+    var evs = S.events.filter(function (e) { return e.date === date; });
+    var autos = auto[date] || [];
+    h += '<div class="cal-d' + (date === TODAY ? ' today' : '') + '" data-day="' + date + '">' +
+      '<div class="cal-n">' + (+date.slice(8)) + '</div>';
+    evs.forEach(function (e) {
+      h += '<div class="cal-e ev-' + esc(e.type) + (e.done ? ' done' : '') + '" data-open="event" data-id="' + esc(e.id) + '" title="' + esc(e.title) + '">' +
+        esc(e.title) + '</div>';
+    });
+    autos.forEach(function (a) {
+      h += '<div class="cal-e ev-auto" title="' + esc(a.t) + '">' + esc(a.t) + '</div>';
+    });
+    h += '</div>';
+  });
+  h += '</div></div>';
+
+  /* upcoming + next steps */
+  var up = S.events.filter(function (e) { return e.date >= TODAY; })
+    .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  var past = S.events.filter(function (e) { return e.date < TODAY; })
+    .sort(function (a, b) { return a.date > b.date ? -1 : 1; }).slice(0, 8);
+  var openNext = [];
+  S.events.forEach(function (e) { (e.next || []).forEach(function (n) { if (!e.done) openNext.push({ e: e, n: n }); }); });
+
+  h += '<div class="section grid g-3">';
+  h += '<div class="card"><div class="card-head"><h2>Coming up</h2></div>' +
+    (up.length ? '<ul class="list-plain">' + up.slice(0, 10).map(function (e) {
+      return '<li class="clickable" data-open="event" data-id="' + esc(e.id) + '">' +
+        '<div class="li-top"><span class="t">' + esc(e.title) + '</span><span class="pill ' + evCls(e.type) + '">' + esc(e.type) + '</span></div>' +
+        '<div class="li-sub">' + fmt(e.date) + ' · ' + esc(whoNames(e.who)) + '</div></li>';
+    }).join('') + '</ul>' : '<div class="empty">Nothing scheduled.</div>') + '</div>';
+
+  h += '<div class="card"><div class="card-head"><h2>Open next steps</h2><span class="sub">' + openNext.length + '</span></div>' +
+    (openNext.length ? '<ul class="list-plain">' + openNext.map(function (x) {
+      return '<li class="clickable" data-open="event" data-id="' + esc(x.e.id) + '">' +
+        '<div>' + esc(x.n) + '</div><div class="li-sub">from ' + esc(x.e.title) + ' · ' + fmt(x.e.date) + '</div></li>';
+    }).join('') + '</ul>' : '<div class="empty">Nothing outstanding.</div>') + '</div>';
+
+  h += '<div class="card"><div class="card-head"><h2>Recently</h2></div>' +
+    (past.length ? '<ul class="list-plain">' + past.map(function (e) {
+      return '<li class="clickable" data-open="event" data-id="' + esc(e.id) + '">' +
+        '<div class="li-top"><span class="t">' + esc(e.title) + '</span><span class="pill ' + (e.done ? 'ok' : 'ghost') + '">' + (e.done ? 'done' : 'open') + '</span></div>' +
+        '<div class="li-sub">' + fmt(e.date) + ' · ' + esc(whoNames(e.who)) + '</div></li>';
+    }).join('') + '</ul>' : '<div class="empty">Nothing logged.</div>') + '</div>';
+  h += '</div>';
+  return h;
+}
+function monthName(ym) {
+  var M = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return M[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4);
+}
+function evCls(t) { return { meeting: 'accent', connect: 'info', email: 'teal', deadline: 'risk' }[t] || 'ghost'; }
+function whoNames(ids) {
+  if (!ids || !ids.length) return '—';
+  return ids.map(function (i) { var p = byId(S.stakeholders, i); return p ? p.name : i; }).join(', ');
+}
+function autoDates() {
+  var out = {};
+  function push(d, t) { if (!d) return; (out[d] = out[d] || []).push({ t: t }); }
+  S.projects.forEach(function (p) {
+    (p.milestones || []).forEach(function (m) { if (!m.done) push(m.date, '◆ ' + p.name.split(' —')[0] + ': ' + m.what.slice(0, 40)); });
+  });
+  S.blockers.forEach(function (b) { if (b.status !== 'Closed') push(b.targetDate, '▲ ' + b.title.slice(0, 40)); });
+  S.stakeholders.forEach(function (p) { push(p.nextContact, '● ' + p.name); });
+  return out;
+}
+function drawerEvent(id) {
+  var e = byId(S.events, id);
+  if (!e) return;
+  var h = '<div class="drawer-head"><div><h2>' + esc(e.title) + '</h2>' +
+    '<div class="meta">' + fmt(e.date) + (e.time ? ' · ' + esc(e.time) : '') + ' · ' + esc(e.type) + '</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="field"><label>Title</label><input type="text" name="title" value="' + esc(e.title) + '"></div>' +
+    '<div class="field-row"><div class="field"><label>Date</label><input type="date" name="date" value="' + esc(e.date) + '"></div>' +
+    '<div class="field"><label>Time</label><input type="text" name="time" value="' + esc(e.time || '') + '" placeholder="10:00"></div>' +
+    '<div class="field"><label>Type</label>' + selN('type', e.type, ['meeting', 'connect', 'email', 'deadline']) + '</div></div>' +
+    '<div class="field"><label>Who</label><div class="chips">' +
+    S.stakeholders.map(function (p) {
+      var on = (e.who || []).indexOf(p.id) >= 0;
+      return '<label class="chip' + (on ? ' on' : '') + '"><input type="checkbox" data-group="who" value="' + esc(p.id) + '"' + (on ? ' checked' : '') + '>' + esc(p.name) + '</label>';
+    }).join('') + '</div></div>' +
+    '<div class="field"><label>Notes</label><textarea name="notes">' + esc(e.notes || '') + '</textarea></div>' +
+    '<div class="field"><label>Next steps — one per line</label><textarea name="next" style="min-height:100px">' + esc((e.next || []).join('\n')) + '</textarea></div>' +
+    '<div class="field"><label>Status</label>' + selN('done', e.done ? 'done' : 'open', ['open', 'done']) + '</div>' +
+    '<button class="btn btn-danger btn-sm" data-act="del-event" data-id="' + esc(e.id) + '">Delete</button>' +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Cancel</button>' +
+    '<button class="btn btn-primary" data-act="save-event" data-id="' + esc(e.id) + '">Save</button></div>';
+  openDrawer(h);
+}
+
+/* =========================================================== MARKET EDIT */
+function drawerMarket(code) {
+  var m = byId2(S.markets, code);
+  if (!m) return;
+  var h = '<div class="drawer-head"><div><h2>Edit ' + esc(m.name) + '</h2>' +
+    '<div class="meta">Everything here is yours to keep current</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="field-row"><div class="field"><label>Name</label><input type="text" name="name" value="' + esc(m.name) + '"></div>' +
+    '<div class="field"><label>Cluster</label>' + selN('cluster', m.cluster, window.DATA_CORE.clusters) + '</div></div>' +
+    '<div class="field"><label>One AZ status</label>' + selN('oneAz', m.oneAz, ['implemented', 'in-process', 'proposed', 'not-started', 'baseline', 'watch', 'out-of-scope']) + '</div>' +
+    '<div class="field-row"><div class="field"><label>Strategist</label><input type="text" name="strategist" value="' + esc(m.strategist) + '"></div>' +
+    '<div class="field"><label>Delivery</label><input type="text" name="delivery" value="' + esc(m.delivery) + '"></div></div>' +
+    '<div class="field"><label>Properties — one per line</label><textarea name="sites">' + esc(m.sites.join('\n')) + '</textarea></div>' +
+    '<div class="field"><label>Headline</label><textarea name="headline" style="min-height:90px">' + esc(m.headline) + '</textarea></div>' +
+    '<div class="field"><label>Contacts — one per line, as <span class="mono">Role: Name</span></label>' +
+    '<textarea name="contacts" style="min-height:150px">' +
+    esc((m.contacts || []).map(function (c) { return c.role + ': ' + c.name; }).join('\n')) + '</textarea>' +
+    '<div class="hint">CDM, Digital Lead, PM, Solution Owner, Requestor — whatever you need to be able to reach.</div></div>' +
+    '<div class="field"><label>Your notes</label><textarea name="notes">' + esc(m.notes || '') + '</textarea></div>' +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Cancel</button>' +
+    '<button class="btn btn-primary" data-act="save-market" data-id="' + esc(code) + '">Save</button></div>';
+  openDrawer(h);
+}
+
+/* ============================================================== INGEST
+   Reads .xlsx, .pptx, .docx, .csv, .txt, .md, .eml and .json in the browser.
+   Office files are ZIPs; we unzip them with DecompressionStream, which every
+   current browser has built in — so this works offline from a local file with
+   no library and no upload. Nothing leaves the machine. */
+
+var ING = { files: [], active: null, map: {}, sheet: 0, target: 'deliverables' };
+
+function crc32Skip() {}
+async function unzip(buf) {
+  var dv = new DataView(buf), n = buf.byteLength, eocd = -1;
+  for (var i = n - 22; i >= 0 && i > n - 66000; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('Not a zip file');
+  var count = dv.getUint16(eocd + 10, true), off = dv.getUint32(eocd + 16, true);
+  var out = {}, p = off;
+  for (var c = 0; c < count; c++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    var method = dv.getUint16(p + 10, true);
+    var csize = dv.getUint32(p + 20, true);
+    var nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    var lho = dv.getUint32(p + 42, true);
+    var name = new TextDecoder().decode(new Uint8Array(buf, p + 46, nlen));
+    var lnlen = dv.getUint16(lho + 26, true), lelen = dv.getUint16(lho + 28, true);
+    var dstart = lho + 30 + lnlen + lelen;
+    var raw = new Uint8Array(buf, dstart, csize);
+    if (method === 0) out[name] = raw;
+    else if (method === 8) {
+      var ds = new DecompressionStream('deflate-raw');
+      var blob = new Blob([raw]).stream().pipeThrough(ds);
+      out[name] = new Uint8Array(await new Response(blob).arrayBuffer());
+    }
+    p += 46 + nlen + elen + clen;
+  }
+  return out;
+}
+function td(u8) { return new TextDecoder('utf-8').decode(u8); }
+function unent(s) {
+  return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+function colIdx(ref) {
+  var m = /^([A-Z]+)/.exec(ref); if (!m) return 0;
+  var n = 0; for (var i = 0; i < m[1].length; i++) n = n * 26 + (m[1].charCodeAt(i) - 64);
+  return n - 1;
+}
+function excelDate(v) {
+  var n = +v; if (!isFinite(n) || n < 20000 || n > 80000) return String(v);
+  var d = new Date(Date.UTC(1899, 11, 30) + n * 864e5);
+  return d.toISOString().slice(0, 10);
+}
+
+async function parseFile(file) {
+  var name = file.name, low = name.toLowerCase();
+  if (/\.(txt|md|csv|tsv|eml|json)$/.test(low)) {
+    var text = await file.text();
+    if (low.endsWith('.json')) return { kind: 'json', name: name, json: JSON.parse(text) };
+    if (/\.(csv|tsv)$/.test(low)) {
+      var sep = low.endsWith('.tsv') ? '\t' : ',';
+      return { kind: 'sheet', name: name, sheets: [{ name: name, rows: parseCSV(text, sep) }] };
+    }
+    return { kind: 'text', name: name, text: text };
+  }
+  var buf = await file.arrayBuffer();
+  var z = await unzip(buf);
+  if (low.endsWith('.xlsx') || low.endsWith('.xlsm')) return { kind: 'sheet', name: name, sheets: readXlsx(z) };
+  if (low.endsWith('.pptx') || low.endsWith('.potx')) return { kind: 'text', name: name, text: readPptx(z) };
+  if (low.endsWith('.docx')) return { kind: 'text', name: name, text: readDocx(z) };
+  throw new Error('Unsupported file type');
+}
+function parseCSV(text, sep) {
+  var rows = [], row = [], cur = '', q = false;
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (q) {
+      if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === sep) { row.push(cur.trim()); cur = ''; }
+    else if (ch === '\n') { row.push(cur.trim()); rows.push(row); row = []; cur = ''; }
+    else if (ch !== '\r') cur += ch;
+  }
+  if (cur || row.length) { row.push(cur.trim()); rows.push(row); }
+  return rows.filter(function (r) { return r.some(function (c) { return c; }); });
+}
+function readXlsx(z) {
+  var ss = [];
+  if (z['xl/sharedStrings.xml']) {
+    var sx = td(z['xl/sharedStrings.xml']);
+    (sx.match(/<si>[\s\S]*?<\/si>/g) || []).forEach(function (si) {
+      var t = (si.match(/<t[^>]*>([\s\S]*?)<\/t>/g) || []).map(function (x) {
+        return unent(x.replace(/<[^>]+>/g, ''));
+      }).join('');
+      ss.push(t.replace(/\s+/g, ' ').trim());
+    });
+  }
+  var wb = td(z['xl/workbook.xml'] || new Uint8Array());
+  var rels = td(z['xl/_rels/workbook.xml.rels'] || new Uint8Array());
+  var rmap = {};
+  (rels.match(/<Relationship[^>]*>/g) || []).forEach(function (r) {
+    var id = (/Id="([^"]+)"/.exec(r) || [])[1], tg = (/Target="([^"]+)"/.exec(r) || [])[1];
+    if (id && tg) rmap[id] = tg.replace(/^\/?xl\//, '').replace(/^\//, '');
+  });
+  var sheets = [];
+  (wb.match(/<sheet [^>]*\/?>/g) || []).forEach(function (s) {
+    var nm = unent((/name="([^"]*)"/.exec(s) || [])[1] || 'Sheet');
+    var rid = (/r:id="([^"]*)"/.exec(s) || [])[1];
+    var path = 'xl/' + (rmap[rid] || '');
+    if (!z[path]) return;
+    var x = td(z[path]), rows = [];
+    (x.match(/<row[^>]*>[\s\S]*?<\/row>/g) || []).forEach(function (r) {
+      var cells = {}, max = -1;
+      var re = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g, m;
+      while ((m = re.exec(r))) {
+        var attrs = m[1] || '', body = m[2] || '';
+        var ref = (/r="([A-Z]+\d+)"/.exec(attrs) || [])[1];
+        var idx = ref ? colIdx(ref) : max + 1;
+        var ty = (/t="([^"]+)"/.exec(attrs) || [])[1] || 'n';
+        var v = (/<v>([\s\S]*?)<\/v>/.exec(body) || [])[1];
+        var val = '';
+        if (ty === 's' && v != null) val = ss[+v] || '';
+        else if (ty === 'inlineStr') val = unent(body.replace(/<[^>]+>/g, '')).trim();
+        else if (v != null) val = unent(v).trim();
+        if (val) cells[idx] = val;
+        if (idx > max) max = idx;
+      }
+      if (max >= 0) {
+        var arr = [];
+        for (var i = 0; i <= max; i++) arr.push(cells[i] || '');
+        rows.push(arr);
+      }
+    });
+    sheets.push({ name: nm, rows: rows });
+  });
+  return sheets;
+}
+function readPptx(z) {
+  var names = Object.keys(z).filter(function (n) { return /^ppt\/slides\/slide\d+\.xml$/.test(n); })
+    .sort(function (a, b) { return (+/(\d+)/.exec(a)[1]) - (+/(\d+)/.exec(b)[1]); });
+  return names.map(function (n, i) {
+    var x = td(z[n]), out = ['--- Slide ' + (i + 1) + ' ---'];
+    (x.match(/<a:p>[\s\S]*?<\/a:p>/g) || []).forEach(function (p) {
+      var t = (p.match(/<a:t>([\s\S]*?)<\/a:t>/g) || []).map(function (y) {
+        return unent(y.replace(/<[^>]+>/g, ''));
+      }).join('').trim();
+      if (t) out.push(t);
+    });
+    return out.join('\n');
+  }).join('\n\n');
+}
+function readDocx(z) {
+  var x = td(z['word/document.xml'] || new Uint8Array()), out = [];
+  (x.match(/<w:p\b[\s\S]*?<\/w:p>/g) || []).forEach(function (p) {
+    var t = (p.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || []).map(function (y) {
+      return unent(y.replace(/<[^>]+>/g, ''));
+    }).join('').replace(/\s+/g, ' ').trim();
+    if (t) out.push(t);
+  });
+  return out.join('\n');
+}
+
+/* --- column mapping targets --- */
+var ING_TARGETS = {
+  deliverables: { label: 'Delivery record', fields: [
+    { k: 'm', l: 'Market', req: true }, { k: 'site', l: 'Site' },
+    { k: 'd', l: 'Deliverable', req: true }, { k: 'date', l: 'Date' },
+    { k: 'st', l: 'Status' }, { k: 'note', l: 'Note' }] },
+  blockers: { label: 'Blockers', fields: [
+    { k: 'title', l: 'Blocker title', req: true }, { k: 'topic', l: 'Topic' },
+    { k: 'markets', l: 'Markets' }, { k: 'priority', l: 'Priority' },
+    { k: 'description', l: 'Description' }, { k: 'rootCause', l: 'Root cause' },
+    { k: 'seoImpact', l: 'SEO impact' }, { k: 'nextStep', l: 'Next step' },
+    { k: 'owner', l: 'Owner' }, { k: 'status', l: 'Status' }, { k: 'targetDate', l: 'Target date' }] },
+  product: { label: 'Product items', fields: [
+    { k: 'id', l: 'Ticket / ID', req: true }, { k: 'title', l: 'Title', req: true },
+    { k: 'ws', l: 'Workstream' }, { k: 'sprint', l: 'Timing' },
+    { k: 'status', l: 'Status' }, { k: 'why', l: 'Description' }, { k: 'markets', l: 'Markets' }] }
+};
+var MARKET_ALIAS = { 'slovekia': 'SK', 'czech republic': 'CZ', 'belux': 'BE', 'belgium': 'BE', 'balkans': 'BALKANS' };
+function toMarketCode(v) {
+  if (!v) return '';
+  var s = String(v).trim();
+  if (S.markets.some(function (m) { return m.code === s.toUpperCase(); })) return s.toUpperCase();
+  var low = s.toLowerCase();
+  if (MARKET_ALIAS[low]) return MARKET_ALIAS[low];
+  var hit = null;
+  S.markets.forEach(function (m) { if (m.name.toLowerCase().indexOf(low) === 0) hit = m.code; });
+  return hit || s.toUpperCase().slice(0, 8);
+}
+function normStatus(v) {
+  var t = String(v || '').toLowerCase();
+  if (!t) return 'unknown';
+  if (t.indexOf('implement') >= 0) return 'implemented';
+  if (t.indexOf('progress') >= 0) return 'in-progress';
+  if (t.indexOf('not start') >= 0) return 'not-started';
+  if (t.indexOf('done') >= 0) return 'done';
+  return 'other';
+}
+function normDate(v) {
+  if (!v) return '';
+  var s = String(v).trim();
+  if (/^\d{4}-\d{2}(-\d{2})?$/.test(s)) return s;
+  if (/^\d+(\.\d+)?$/.test(s)) { var d = excelDate(s); return /^\d{4}-/.test(d) ? d : ''; }
+  var M = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+  var m = /^([A-Za-z]{3,})'?\s*(\d{2,4})$/.exec(s);
+  if (m && M[m[1].slice(0, 3).toLowerCase()]) {
+    var yr = m[2].length === 2 ? '20' + m[2] : m[2];
+    return yr + '-' + M[m[1].slice(0, 3).toLowerCase()];
+  }
+  return '';
+}
+
+function viewIngest() {
+  var h = '<div class="page-head"><div class="eyebrow">Keeping it current</div><h1>Ingest</h1>' +
+    '<p>Drop a tracker, a deck, a document or an email in here. Spreadsheets get column-mapped and merged into the desk; ' +
+    'decks and documents get their text extracted so you can turn a paragraph into a product item or a blocker in two clicks. ' +
+    'Everything is parsed in this browser — no upload, works offline.</p></div>';
+
+  h += '<div class="card card-pad" id="drop" style="border:2px dashed var(--line-strong);text-align:center;padding:30px">' +
+    '<div style="font-size:15px;font-weight:600;margin-bottom:6px">Drop files here</div>' +
+    '<div class="src" style="margin-bottom:14px">.xlsx · .pptx · .docx · .csv · .txt · .md · .eml · .json backup</div>' +
+    '<label class="btn btn-primary">Choose files<input type="file" id="ing-file" multiple hidden ' +
+    'accept=".xlsx,.xlsm,.pptx,.potx,.docx,.csv,.tsv,.txt,.md,.eml,.json"></label></div>';
+
+  if (ING.files.length) {
+    h += '<div class="section"><h2>Loaded</h2><div class="card"><ul class="list-plain">' +
+      ING.files.map(function (f, i) {
+        return '<li class="clickable' + (ING.active === i ? ' on' : '') + '" data-ingfile="' + i + '">' +
+          '<div class="li-top"><span class="t">' + esc(f.name) + '</span>' +
+          '<span class="pill ' + (f.kind === 'sheet' ? 'info' : f.kind === 'json' ? 'accent' : 'ghost') + '">' + esc(f.kind) + '</span></div>' +
+          '<div class="li-sub">' + (f.kind === 'sheet' ? f.sheets.length + ' sheet(s), ' +
+            f.sheets.reduce(function (a, s) { return a + s.rows.length; }, 0) + ' rows'
+            : f.kind === 'text' ? (f.text.length + ' characters extracted') : 'backup file') + '</div></li>';
+      }).join('') + '</ul></div></div>';
+  }
+
+  var f = ING.active !== null ? ING.files[ING.active] : null;
+  if (f && f.kind === 'json') {
+    h += '<div class="section"><div class="card card-pad">' +
+      '<div class="note-box warn"><strong>This is a desk backup.</strong> Restoring replaces everything currently in this browser.</div>' +
+      '<div class="btn-row" style="margin-top:12px"><button class="btn btn-primary" data-act="ing-restore">Restore this backup</button></div></div></div>';
+  }
+
+  if (f && f.kind === 'sheet') {
+    var sh = f.sheets[ING.sheet] || f.sheets[0];
+    var tgt = ING_TARGETS[ING.target];
+    h += '<div class="section"><h2>Map the columns</h2>';
+    h += '<div class="filters">' +
+      '<select id="ing-sheet">' + f.sheets.map(function (s, i) {
+        return '<option value="' + i + '"' + (i === ING.sheet ? ' selected' : '') + '>' + esc(s.name) + ' (' + s.rows.length + ' rows)</option>';
+      }).join('') + '</select>' +
+      '<select id="ing-target">' + Object.keys(ING_TARGETS).map(function (k) {
+        return '<option value="' + k + '"' + (k === ING.target ? ' selected' : '') + '>Into: ' + esc(ING_TARGETS[k].label) + '</option>';
+      }).join('') + '</select>' +
+      '<span class="spacer"></span><span class="src">Blank rows and rows missing a required field are skipped. Market cells carry down when merged.</span></div>';
+
+    var head = sh.rows[0] || [];
+    h += '<div class="card card-pad"><div class="grid g-3">' +
+      tgt.fields.map(function (fl) {
+        var cur = ING.map[ING.target + ':' + fl.k];
+        if (cur === undefined) { cur = guessCol(head, fl); ING.map[ING.target + ':' + fl.k] = cur; }
+        return '<div class="field" style="margin:0"><label>' + esc(fl.l) + (fl.req ? ' <span style="color:var(--risk)">*</span>' : '') + '</label>' +
+          '<select data-ingmap="' + esc(fl.k) + '"><option value="-1">— none —</option>' +
+          head.map(function (hn, i) {
+            return '<option value="' + i + '"' + (String(cur) === String(i) ? ' selected' : '') + '>' +
+              esc((hn || ('Column ' + (i + 1))).slice(0, 40)) + '</option>';
+          }).join('') + '</select></div>';
+      }).join('') + '</div>';
+
+    var prev = buildRows(sh, ING.target);
+    h += '<div class="divider"></div><div class="li-top"><strong style="font-size:13px">Preview — ' + prev.length + ' usable rows</strong>' +
+      '<button class="btn btn-primary btn-sm" data-act="ing-merge">Merge ' + prev.length + ' rows</button></div>' +
+      '<div class="tbl-wrap" style="max-height:340px;overflow-y:auto;margin-top:10px"><table class="tbl"><thead><tr>' +
+      tgt.fields.map(function (fl) { return '<th>' + esc(fl.l) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      prev.slice(0, 40).map(function (r) {
+        return '<tr>' + tgt.fields.map(function (fl) {
+          return '<td>' + esc(String(r[fl.k] === undefined ? '' : (Array.isArray(r[fl.k]) ? r[fl.k].join(', ') : r[fl.k])).slice(0, 90)) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</tbody></table></div></div></div>';
+  }
+
+  if (f && f.kind === 'text') {
+    h += '<div class="section"><h2>Extracted text</h2>' +
+      '<p class="src" style="margin:-6px 0 12px;max-width:74ch">Select any passage, then send it straight into a new product item, blocker or calendar entry — the text lands in the description and you fill in the rest.</p>' +
+      '<div class="grid g-side"><div class="card card-pad">' +
+      '<textarea id="ing-text" class="out" style="min-height:460px" spellcheck="false">' + esc(f.text) + '</textarea></div>' +
+      '<div><div class="card card-pad"><div class="eyebrow">Create from selection</div>' +
+      '<div class="btn-row" style="margin-top:10px;flex-direction:column;align-items:stretch">' +
+      '<button class="btn" data-act="ing-mk-product">→ New product item</button>' +
+      '<button class="btn" data-act="ing-mk-blocker">→ New blocker</button>' +
+      '<button class="btn" data-act="ing-mk-event">→ New calendar entry</button>' +
+      '</div><div class="src" style="margin-top:12px">With nothing selected, the first 600 characters are used.</div></div></div></div></div>';
+  }
+  return h;
+}
+function guessCol(head, fl) {
+  var want = { m: ['market', 'country'], site: ['site', 'website', 'url', 'property'], d: ['deliver', 'activity', 'task', 'work'],
+    date: ['delivery date', 'date', 'expected'], st: ['status'], note: ['comment', 'note'],
+    title: ['title', 'blocker topic', 'name', 'summary', 'epic'], topic: ['topic', 'theme'],
+    markets: ['market'], priority: ['priority'], description: ['description', 'theme / description'],
+    rootCause: ['root cause'], seoImpact: ['seo', 'audience'], nextStep: ['next step'],
+    owner: ['owner', 'accountable'], targetDate: ['target'], id: ['id', 'key', 'ticket'],
+    ws: ['workstream'], sprint: ['sprint', 'timing'], why: ['description', 'detail'] }[fl.k] || [];
+  for (var w = 0; w < want.length; w++) {
+    for (var i = 0; i < head.length; i++) {
+      if (String(head[i] || '').toLowerCase().indexOf(want[w]) >= 0) return i;
+    }
+  }
+  return -1;
+}
+function buildRows(sh, target) {
+  var tgt = ING_TARGETS[target], out = [], carry = {};
+  for (var i = 1; i < sh.rows.length; i++) {
+    var r = sh.rows[i], rec = {}, ok = true;
+    tgt.fields.forEach(function (fl) {
+      var ci = +ING.map[target + ':' + fl.k];
+      var v = (ci >= 0 && r[ci] !== undefined) ? String(r[ci]).trim() : '';
+      if ((fl.k === 'm' || fl.k === 'site') && !v) v = carry[fl.k] || '';
+      else if (fl.k === 'm' || fl.k === 'site') carry[fl.k] = v;
+      rec[fl.k] = v;
+    });
+    tgt.fields.forEach(function (fl) { if (fl.req && !rec[fl.k]) ok = false; });
+    if (!ok) continue;
+    if (target === 'deliverables') {
+      rec.m = toMarketCode(rec.m); rec.st = normStatus(rec.st); rec.date = normDate(rec.date);
+    }
+    if (target === 'blockers' || target === 'product') {
+      if (rec.markets) rec.markets = String(rec.markets).split(/[,;/]/).map(function (s) { return toMarketCode(s); }).filter(Boolean);
+      else rec.markets = [];
+    }
+    out.push(rec);
+  }
+  return out;
+}
+function mergeRows(rows, target) {
+  var added = 0, updated = 0;
+  if (target === 'deliverables') {
+    var idx = {};
+    S.deliverables.forEach(function (d) { idx[d.m + '|' + d.d.slice(0, 90)] = d; });
+    rows.forEach(function (r) {
+      var k = r.m + '|' + r.d.slice(0, 90), ex = idx[k];
+      if (ex) {
+        if (ex.st !== r.st || ex.date !== r.date) { ex.st = r.st || ex.st; ex.date = r.date || ex.date; ex.note = r.note || ex.note; updated++; }
+      } else { S.deliverables.push({ m: r.m, site: r.site, d: r.d, date: r.date, st: r.st, note: r.note }); idx[k] = r; added++; }
+    });
+  }
+  if (target === 'blockers') {
+    rows.forEach(function (r) {
+      var ex = null;
+      S.blockers.forEach(function (b) { if (b.title.toLowerCase() === String(r.title).toLowerCase()) ex = b; });
+      if (ex) {
+        ['topic','priority','description','rootCause','seoImpact','nextStep','owner','status','targetDate'].forEach(function (k) {
+          if (r[k]) ex[k] = r[k];
+        });
+        if (r.markets && r.markets.length) ex.markets = r.markets;
+        updated++;
+      } else {
+        S.blockers.push({
+          id: uid('blk'), title: r.title, topic: r.topic || 'Other', markets: r.markets || [],
+          priority: r.priority || 'Medium', status: r.status || 'To review', verified: false, tags: [],
+          description: r.description || '', rootCause: r.rootCause || '', implImpact: '',
+          seoImpact: r.seoImpact || '', evidence: '', direction: '', owner: r.owner || '',
+          supporting: '', nextStep: r.nextStep || '', targetDate: normDate(r.targetDate) || '',
+          escalate: 'To assess', source: 'Imported', toldMarkets: '', toldProduct: ''
+        });
+        added++;
+      }
+    });
+  }
+  if (target === 'product') {
+    rows.forEach(function (r) {
+      var ex = byId(S.product, r.id);
+      if (ex) {
+        ['title','ws','sprint','status','why'].forEach(function (k) { if (r[k]) ex[k] = r[k]; });
+        if (r.markets && r.markets.length) ex.markets = r.markets;
+        updated++;
+      } else {
+        S.product.push({
+          id: r.id, title: r.title, ws: r.ws || 'OneAZ', sprint: r.sprint || '',
+          status: r.status || 'on-track', seo: 'medium', tags: [],
+          markets: (r.markets && r.markets.length) ? r.markets : ['ALL'], assessment: 'draft',
+          why: r.why || '', toMarkets: '', toProduct: '', flag: 'none',
+          comms: { markets: '', product: '' }, due: ''
+        });
+        added++;
+      }
+    });
+  }
+  return { added: added, updated: updated };
+}
+function ingSelection() {
+  var ta = document.getElementById('ing-text');
+  if (!ta) return '';
+  var s = ta.value.slice(ta.selectionStart, ta.selectionEnd).trim();
+  return s || ta.value.slice(0, 600).trim();
+}
+
 /* ============================================================== ROUTER */
 function render() {
   var parts = location.hash.replace(/^#\/?/, '').split('/');
@@ -1130,12 +2127,17 @@ function render() {
   var el = document.getElementById('view');
   var html;
   if (v === 'product') html = viewProduct();
+  else if (v === 'pmap') html = viewProductMap();
+  else if (v === 'map') html = viewMap();
   else if (v === 'markets') html = arg ? viewMarket(decodeURIComponent(arg)) : viewMarkets();
   else if (v === 'blockers') html = viewBlockers();
   else if (v === 'projects') html = viewProjects();
+  else if (v === 'paywall') html = viewPaywall();
   else if (v === 'check') html = viewCheck(arg);
   else if (v === 'people') html = viewPeople();
+  else if (v === 'cal') html = viewCalendar();
   else if (v === 'brief') html = viewBrief();
+  else if (v === 'ingest') html = viewIngest();
   else if (v === 'data') html = viewData();
   else html = viewDashboard();
   el.innerHTML = html;
@@ -1270,6 +2272,48 @@ document.addEventListener('click', function (e) {
       save(); render(); toast('Marked as raised with product'); return;
     }
 
+    if (a2 === 'sync-connect') {
+      var k = document.getElementById('sync-key');
+      SYNC.setKey(k ? k.value.trim() : '');
+      SYNC.pull().then(function (remote) {
+        if (SYNC.state.error) { toast(SYNC.state.error); render(); return; }
+        if (remote && remote.product) {
+          if (confirm('The server has a saved desk. Load it into this browser?\n\nCancel keeps what is here and pushes it up instead.')) {
+            S = remote; save();
+          } else { SYNC.push(S); }
+        } else { SYNC.push(S); }
+        toast('Connected'); render();
+      });
+      return;
+    }
+    if (a2 === 'sync-off') { SYNC.setKey(''); render(); toast('Disconnected'); return; }
+    if (a2 === 'sync-pull') {
+      SYNC.pull().then(function (remote) {
+        if (!remote) { toast(SYNC.state.error || 'Nothing saved on the server yet'); render(); return; }
+        if (confirm('Replace this browser\'s copy with the server copy?')) {
+          S = remote;
+          try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+          toast('Pulled from server');
+        }
+        render();
+      });
+      return;
+    }
+    if (a2 === 'sync-push') {
+      SYNC.push(S).then(function (r) {
+        if (r.conflict) {
+          if (confirm('The server copy is newer. Overwrite it with this browser\'s copy?')) {
+            SYNC.state.version = r.version;
+            SYNC.push(S).then(function () { toast('Pushed'); render(); });
+          } else render();
+          return;
+        }
+        toast(r.ok ? 'Pushed to server' : ('Failed: ' + SYNC.state.error));
+        render();
+      });
+      return;
+    }
+
     if (a2 === 'export') {
       download('oneaz-liaison-backup-' + TODAY + '.json', JSON.stringify(S, null, 2));
       return;
@@ -1280,6 +2324,110 @@ document.addEventListener('click', function (e) {
       }
       return;
     }
+
+    if (a2 === 'df-clear') { df.market = ''; df.band = ''; df.q = ''; render(); return; }
+    if (a2 === 'edit-market') { drawerMarket(id); return; }
+    if (a2 === 'save-market') {
+      var mm = byId2(S.markets, id);
+      if (mm) {
+        mm.name = dv('name') || mm.name; mm.cluster = dv('cluster'); mm.oneAz = dv('oneAz');
+        mm.strategist = dv('strategist'); mm.delivery = dv('delivery');
+        mm.sites = dv('sites').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        mm.headline = dv('headline'); mm.notes = dv('notes');
+        mm.contacts = dv('contacts').split('\n').map(function (l) {
+          var i = l.indexOf(':');
+          if (!l.trim()) return null;
+          if (i < 0) return { role: '', name: l.trim() };
+          return { role: l.slice(0, i).trim(), name: l.slice(i + 1).trim() };
+        }).filter(Boolean);
+      }
+      save(); closeDrawer(); render(); toast('Market updated'); return;
+    }
+
+    if (a2 === 'new-event') {
+      var ne = { id: uid('ev'), date: TODAY, time: '', type: 'meeting',
+        who: [], title: 'New entry', notes: '', next: [], done: false };
+      S.events.push(ne); save(); render(); drawerEvent(ne.id); return;
+    }
+    if (a2 === 'save-event') {
+      var ev = byId(S.events, id);
+      if (ev) {
+        ev.title = dv('title') || ev.title; ev.date = dv('date') || ev.date; ev.time = dv('time');
+        ev.type = dv('type'); ev.notes = dv('notes'); ev.done = dv('done') === 'done';
+        ev.next = dv('next').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        ev.who = dchecks('who');
+      }
+      save(); closeDrawer(); render(); toast('Saved'); return;
+    }
+    if (a2 === 'del-event') {
+      S.events = S.events.filter(function (x) { return x.id !== id; });
+      save(); closeDrawer(); render(); return;
+    }
+
+    if (a2 === 'ing-restore') {
+      var jf = ING.files[ING.active];
+      if (jf && jf.json && jf.json.product) {
+        if (confirm('Replace everything in this browser with the contents of ' + jf.name + '?')) {
+          S = jf.json; save(); render(); toast('Backup restored');
+        }
+      } else toast('That JSON is not a desk backup');
+      return;
+    }
+    if (a2 === 'ing-merge') {
+      var ff = ING.files[ING.active];
+      var res = mergeRows(buildRows(ff.sheets[ING.sheet], ING.target), ING.target);
+      save(); render();
+      toast(res.added + ' added, ' + res.updated + ' updated');
+      return;
+    }
+    if (a2 === 'ing-mk-product') {
+      var txt = ingSelection();
+      var np2 = { id: uid('item'), title: txt.split('\n')[0].slice(0, 80) || 'New product item', ws: 'OneAZ',
+        sprint: '', status: 'on-track', seo: 'medium', tags: [], markets: ['ALL'], assessment: 'draft',
+        why: txt, toMarkets: '', toProduct: '', flag: 'none', comms: { markets: '', product: '' }, due: '' };
+      S.product.unshift(np2); save(); drawerProduct(np2.id); return;
+    }
+    if (a2 === 'ing-mk-blocker') {
+      var txt2 = ingSelection();
+      var nb2 = { id: uid('blk'), topic: 'Other', title: txt2.split('\n')[0].slice(0, 80) || 'New blocker',
+        markets: [], priority: 'High', status: 'To review', verified: false, tags: [], description: txt2,
+        rootCause: '', implImpact: '', seoImpact: '', evidence: '', direction: '', owner: '', supporting: '',
+        nextStep: '', targetDate: '', escalate: 'To assess', source: 'From ingest', toldMarkets: '', toldProduct: '' };
+      S.blockers.unshift(nb2); save(); drawerBlocker(nb2.id); return;
+    }
+    if (a2 === 'ing-mk-event') {
+      var txt3 = ingSelection();
+      var ne2 = { id: uid('ev'), date: TODAY, time: '', type: 'meeting', who: [],
+        title: txt3.split('\n')[0].slice(0, 80) || 'New entry', notes: txt3, next: [], done: false };
+      S.events.push(ne2); save(); drawerEvent(ne2.id); return;
+    }
+  }
+
+  var pmc = t.closest && t.closest('[data-pmcat]');
+  if (pmc) { pmSel = pmc.getAttribute('data-pmcat'); render(); return; }
+
+  var wz = t.closest && t.closest('[data-zone]');
+  if (wz) { var z = wz.getAttribute('data-zone'); pmZone = (pmZone === z ? '' : z); render(); return; }
+
+  var cal = t.closest && t.closest('[data-cal]');
+  if (cal) {
+    var k = cal.getAttribute('data-cal');
+    if (k === 'today') calMonth = TODAY.slice(0, 7);
+    else {
+      var yy = +calMonth.slice(0, 4), mm2 = +calMonth.slice(5, 7) + (k === 'next' ? 1 : -1);
+      calMonth = new Date(Date.UTC(yy, mm2 - 1, 1)).toISOString().slice(0, 7);
+    }
+    render(); return;
+  }
+
+  var ingf = t.closest && t.closest('[data-ingfile]');
+  if (ingf) { ING.active = +ingf.getAttribute('data-ingfile'); ING.sheet = 0; ING.map = {}; render(); return; }
+
+  var dayEl = t.closest && t.closest('[data-day]');
+  if (dayEl && !(t.closest && t.closest('[data-open]'))) {
+    var nd = { id: uid('ev'), date: dayEl.getAttribute('data-day'), time: '', type: 'meeting',
+      who: [], title: 'New entry', notes: '', next: [], done: false };
+    S.events.push(nd); save(); render(); drawerEvent(nd.id); return;
   }
 
   var br = t.closest && t.closest('[data-brief]');
@@ -1292,6 +2440,7 @@ document.addEventListener('click', function (e) {
     else if (kind === 'blocker') drawerBlocker(oid);
     else if (kind === 'project') drawerProject(oid);
     else if (kind === 'person') drawerPerson(oid);
+    else if (kind === 'event') drawerEvent(oid);
     else if (kind === 'market') location.hash = '#/markets/' + encodeURIComponent(oid);
     else if (kind === 'assessment') location.hash = '#/check/' + encodeURIComponent(oid);
     return;
@@ -1311,6 +2460,15 @@ document.addEventListener('change', function (e) {
   if (t.id === 'bf-topic') { bf.topic = t.value; render(); }
   if (t.id === 'bf-prio') { bf.prio = t.value; render(); }
   if (t.id === 'bf-comm') { bf.comm = t.value; render(); }
+  if (t.id === 'df-market') { df.market = t.value; render(); }
+  if (t.id === 'df-band') { df.band = t.value; render(); }
+  if (t.id === 'df-sort') { df.sort = t.value; render(); }
+  if (t.id === 'ing-sheet') { ING.sheet = +t.value; ING.map = {}; render(); }
+  if (t.id === 'ing-target') { ING.target = t.value; render(); }
+  if (t.hasAttribute && t.hasAttribute('data-ingmap')) {
+    ING.map[ING.target + ':' + t.getAttribute('data-ingmap')] = +t.value; render();
+  }
+  if (t.id === 'ing-file' && t.files && t.files.length) { loadIngest(t.files); }
 
   if (t.hasAttribute && t.hasAttribute('data-ms')) {
     var p = t.getAttribute('data-ms').split('|');
@@ -1341,6 +2499,14 @@ document.addEventListener('input', function (e) {
     window._q = setTimeout(function () {
       pf.q = t.value; render();
       var el = document.getElementById('pf-q');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    }, 260);
+  }
+  if (t.id === 'df-q') {
+    clearTimeout(window._dq);
+    window._dq = setTimeout(function () {
+      df.q = t.value; render();
+      var el = document.getElementById('df-q');
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
     }, 260);
   }
@@ -1434,6 +2600,34 @@ function download(name, text) {
   document.body.removeChild(a); setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
 }
 
+function loadIngest(files) {
+  var list = Array.prototype.slice.call(files), done = 0;
+  list.forEach(function (f) {
+    parseFile(f).then(function (r) {
+      ING.files.push(r);
+      if (ING.active === null) ING.active = ING.files.length - 1;
+    }, function (err) {
+      toast('Could not read ' + f.name + ': ' + err.message);
+    }).then(function () {
+      if (++done === list.length) { ING.map = {}; render(); }
+    });
+  });
+}
+document.addEventListener('dragover', function (e) {
+  if (location.hash.indexOf('ingest') < 0) return;
+  e.preventDefault();
+  var d = document.getElementById('drop'); if (d) d.style.borderColor = 'var(--accent)';
+});
+document.addEventListener('dragleave', function () {
+  var d = document.getElementById('drop'); if (d) d.style.borderColor = '';
+});
+document.addEventListener('drop', function (e) {
+  if (location.hash.indexOf('ingest') < 0) return;
+  e.preventDefault();
+  var d = document.getElementById('drop'); if (d) d.style.borderColor = '';
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) loadIngest(e.dataTransfer.files);
+});
+
 /* --------------------------------------------------------------- boot */
 try {
   var th = localStorage.getItem(KEY + ':theme');
@@ -1445,5 +2639,16 @@ try {
 S = load();
 window.addEventListener('hashchange', function () { closeDrawer(); render(); });
 render();
+
+if (window.SYNC && SYNC.state.on) {
+  SYNC.pull().then(function (remote) {
+    if (remote && remote.product && JSON.stringify(remote) !== JSON.stringify(S)) {
+      S = remote;
+      try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
+      render();
+      toast('Loaded the server copy');
+    }
+  });
+}
 
 })();
