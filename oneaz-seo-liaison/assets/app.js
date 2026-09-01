@@ -38,17 +38,32 @@ function marketName(code) {
 function byId2(arr, code) { for (var i = 0; i < arr.length; i++) if (arr[i].code === code) return arr[i]; return null; }
 
 /* ------------------------------------------------------------- storage */
+function withRollout(items) {
+  var R = window.DATA_EXPLAIN.rollout;
+  items.forEach(function (p) {
+    if (p.rollout) return;
+    var r = R[p.id];
+    p.rollout = r ? r.state : (p.status === 'delivered' ? 'live' : p.status === 'spike' ? 'spike' :
+      p.status === 'blocked' ? 'blocked' : 'building');
+  });
+  return items;
+}
 function seed() {
   return {
     v: 2, updated: TODAY,
     markets: clone(window.DATA_CORE.markets),
     stakeholders: clone(window.DATA_CORE.stakeholders),
-    product: clone(window.DATA_PRODUCT.items),
+    product: withRollout(clone(window.DATA_PRODUCT.items)),
     pi: clone(window.DATA_PRODUCT.pi),
     blockers: clone(window.DATA_MARKET.blockers),
     projects: clone(window.DATA_MARKET.projects),
     deliverables: clone(window.DATA_DELIVERABLES),
     events: clone(window.DATA_VIEWS.events),
+    docs: clone(window.DATA_DOCS.docs),
+    sharedLinks: clone(window.DATA_SITEMAP.shared),
+    marketSites: clone(window.DATA_SITEMAP.sites),
+    marketLinks: {},
+    learnDone: {},
     assessments: [],
     log: []
   };
@@ -60,7 +75,13 @@ function load() {
       var p = JSON.parse(raw);
       if (p && p.product) {
         if (!p.events) p.events = clone(window.DATA_VIEWS.events);
+        if (!p.docs) p.docs = clone(window.DATA_DOCS.docs);
+        if (!p.sharedLinks) p.sharedLinks = clone(window.DATA_SITEMAP.shared);
+        if (!p.marketSites) p.marketSites = clone(window.DATA_SITEMAP.sites);
+        if (!p.marketLinks) p.marketLinks = {};
+        if (!p.learnDone) p.learnDone = {};
         if (!p.assessments) p.assessments = [];
+        withRollout(p.product);
         p.product.forEach(function (x) { if (x.due === undefined) x.due = ''; });
         return p;
       }
@@ -142,19 +163,22 @@ var ONEAZ = {
 
 /* ------------------------------------------------------------ chrome */
 var NAV = [
-  ['', 'Dashboard'], ['product', 'Product radar'], ['pmap', 'Product map'],
+  ['', 'Dashboard'], ['learn', 'Learn'], ['product', 'Product'],
   ['markets', 'Markets'], ['blockers', 'Blockers'], ['projects', 'Projects'],
-  ['paywall', 'Paywall'], ['check', 'GEO checklist'], ['people', 'People'],
-  ['brief', 'Briefings']
+  ['paywall', 'Paywall'], ['check', 'Checklist'], ['people', 'People'],
+  ['docs', 'Documents'], ['brief', 'Briefings']
 ];
+var NAV_ALIAS = {
+  pmap: 'product', ptime: 'product', pstruct: 'product',
+  map: 'markets', links: 'markets', cal: 'people', glossary: 'learn'
+};
 function renderNav() {
   var cur = (location.hash.replace('#/', '').split('/')[0]) || '';
   var counts = {
     product: S.product.filter(function (p) { return needsMarkets(p) || needsProduct(p); }).length,
     blockers: openBlockers().length
   };
-  if (cur === 'map') cur = 'markets';
-  if (cur === 'cal') cur = 'people';
+  if (NAV_ALIAS[cur]) cur = NAV_ALIAS[cur];
   document.getElementById('nav').innerHTML = NAV.map(function (n) {
     var on = n[0] === cur ? ' class="on"' : '';
     var c = counts[n[0]] ? '<span class="n">' + counts[n[0]] + '</span>' : '';
@@ -263,6 +287,7 @@ function viewProduct() {
     '<p>Every One AZ item that could change what the markets have to do, with the SEO and GEO read attached, ' +
     'and a record of whether you have actually told anyone. Items marked <em>draft</em> are a first-pass read — confirm them before you quote them.</p></div>';
 
+  h += subtabs(PRODTABS, 'product');
   h += '<div class="card card-pad" style="margin-bottom:14px"><div class="grid g-2" style="gap:18px">' +
     '<div><div class="eyebrow">' + esc(pi.name) + '</div><div style="font-weight:600">' + esc(pi.window) + '</div>' +
     '<div class="src" style="margin-top:4px">Planned ' + esc(pi.planned) + ' · releases: ' + pi.releases.map(esc).join(' · ') + '</div></div>' +
@@ -339,6 +364,11 @@ function drawerProduct(id) {
     '<span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + esc(p.seo) + ' SEO/GEO impact</span>' +
     '<span class="pill ' + (STAT[p.status] || 'ghost') + '">' + esc(p.status) + '</span>' +
     '<span class="pill ' + (p.assessment === 'draft' ? 'warn' : 'ok') + '">' + (p.assessment === 'draft' ? 'Draft read — confirm' : 'Confirmed') + '</span>' +
+    (function () {
+      var r = window.DATA_EXPLAIN.rolloutStates[p.rollout || 'building'];
+      return r ? '<span class="pill ' + r[0] + '">' + esc(r[1]) + '</span>' : '';
+    })() +
+    (p.due ? '<span class="pill ' + (daysUntil(p.due) < 0 ? 'risk' : 'ghost') + '">due ' + fmt(p.due) + '</span>' : '') +
     '</div>';
 
   h += '<div class="prose"><p>' + esc(p.why) + '</p></div>';
@@ -365,6 +395,9 @@ function drawerProduct(id) {
     '<div class="field-row">' +
     '<div class="field"><label>Workstream</label><input type="text" name="ws" value="' + esc(p.ws) + '"></div>' +
     '<div class="field"><label>Timing</label><input type="text" name="sprint" value="' + esc(p.sprint) + '"></div></div>' +
+    '<div class="field-row">' +
+    '<div class="field"><label>Rollout state</label>' + selN('rollout', p.rollout || 'building', ['live', 'building', 'spike', 'planned', 'blocked']) + '</div>' +
+    '<div class="field"><label>Tell someone by</label><input type="date" name="due" value="' + esc(p.due || '') + '"></div></div>' +
     '<div class="field"><label>Flag direction</label>' + selN('flag', p.flag, ['none', 'to-markets', 'to-product', 'both']) + '</div>' +
     '<div class="field"><label>Assessment</label>' + selN('assessment', p.assessment, ['draft', 'confirmed']) + '</div>' +
     '<div class="field"><label>Why it matters for SEO / GEO</label><textarea name="why">' + esc(p.why) + '</textarea></div>' +
@@ -398,8 +431,7 @@ function selN(name, val, opts) {
 function viewMarkets() {
   var h = '<div class="page-head"><div class="eyebrow">Market side</div><h1>Markets</h1>' +
     '<p>One row per market: where One AZ adoption stands, what is running, what is blocked, and whether the blockers have been communicated. Click a row for the full market view.</p></div>';
-  h += '<div class="filters"><button class="btn btn-sm btn-primary">List</button>' +
-    '<a class="btn btn-sm" href="#/map">Map</a></div>';
+  h += subtabs(MKTTABS, 'markets');
 
   var groups = {};
   S.markets.forEach(function (m) { (groups[m.cluster] = groups[m.cluster] || []).push(m); });
@@ -914,6 +946,7 @@ function viewPeople() {
   var sides = [['product', 'Product side'], ['programme', 'Programme and Web Delivery'], ['seo', 'SEO team'], ['market', 'Markets']];
   h += '<div class="filters"><button class="btn btn-sm btn-primary">People</button>' +
     '<a class="btn btn-sm" href="#/cal">Calendar</a><span class="spacer"></span>' +
+    '<a class="btn btn-sm" href="#/docs">Documents</a>' +
     '<button class="btn btn-primary btn-sm" data-act="new-person">+ Add a stakeholder</button></div>';
 
   sides.forEach(function (sd) {
@@ -981,6 +1014,7 @@ function viewBrief() {
     '<button class="btn" data-act="download-brief">Download .md</button>' +
     (briefKind === 'markets' ? '<button class="btn" data-act="mark-markets">Mark these as told to markets (today)</button>' : '') +
     (briefKind === 'product' ? '<button class="btn" data-act="mark-product">Mark these as raised with product (today)</button>' : '') +
+    '<button class="btn" data-act="log-brief">Log in Documents</button>' +
     '</div></div>';
   return h;
 }
@@ -1326,6 +1360,7 @@ function viewProductMap() {
     '<span class="pill warn">watch</span> can undo our work if it ships unreviewed, ' +
     '<span class="pill ghost">light</span> is worth knowing and rarely worth intervening in.</p></div>';
 
+  h += subtabs(PRODTABS, 'pmap');
   var CARE = { core: 'risk', watch: 'warn', light: 'ghost' };
 
   /* category grid */
@@ -1334,7 +1369,7 @@ function viewProductMap() {
     var items = S.product.filter(function (p) { return (V.itemCat[p.id] || [])[0] === c.id; });
     var hi = items.filter(function (p) { return p.seo === 'high'; }).length;
     var due = items.filter(function (p) { return needsMarkets(p) || needsProduct(p); }).length;
-    h += '<div class="card pm-cat clickable" data-pmcat="' + esc(c.id) + '">' +
+    h += '<div class="card pm-cat clickable" data-catdive="' + esc(c.id) + '|">' +
       '<div class="card-pad">' +
       '<div class="li-top" style="align-items:flex-start"><div><span class="pm-icon">' + c.icon + '</span> ' +
       '<strong style="font-size:14px">' + esc(c.title) + '</strong></div>' +
@@ -1435,7 +1470,7 @@ var pmZone = '';
 function wireRegion(id, label, n, cls) {
   var V = window.DATA_VIEWS, care = 'light';
   V.anatomy.forEach(function (a) { if (a.id === id) care = a.care; });
-  return '<div class="wr ' + cls + ' care-' + care + (pmZone === id ? ' on' : '') + '" data-zone="' + esc(id) + '">' +
+  return '<div class="wr ' + cls + ' care-' + care + (pmZone === id ? ' on' : '') + '" data-zone="' + esc(id) + '" title="Click for the full detail">' +
     '<span class="wr-n">' + n + '</span><span class="wr-t">' + esc(label) + '</span></div>';
 }
 
@@ -1475,11 +1510,9 @@ function viewMap() {
   });
   svg += '</svg>';
 
-  var h = '<div class="filters" style="margin-bottom:14px">' +
-    '<a class="btn btn-sm" href="#/markets">List</a>' +
-    '<button class="btn btn-sm btn-primary">Map</button>' +
-    '<span class="spacer"></span>' +
-    '<span class="src">Bubble size = deliverables logged · fill = One AZ status · ring = open market-specific blockers</span></div>';
+  var h = subtabs(MKTTABS, 'map') +
+    '<div class="filters" style="margin-bottom:14px"><span class="src">Bubble size = deliverables logged · ' +
+    'fill = One AZ status · ring = open market-specific blockers</span></div>';
 
   h = '<div class="page-head"><div class="eyebrow">Market side</div><h1>Map</h1>' +
     '<p>Click a market to open it. Positions are approximate capital coordinates — a schematic for navigation, not a survey.</p></div>' + h;
@@ -2120,6 +2153,711 @@ function ingSelection() {
   return s || ta.value.slice(0, 600).trim();
 }
 
+/* ====================================================== SUB-TAB HELPER */
+function subtabs(items, cur) {
+  return '<div class="filters">' + items.map(function (i) {
+    return i[0] === cur
+      ? '<button class="btn btn-sm btn-primary">' + esc(i[1]) + '</button>'
+      : '<a class="btn btn-sm" href="#/' + i[0] + '">' + esc(i[1]) + '</a>';
+  }).join('') + '<span class="spacer"></span></div>';
+}
+var PRODTABS = [['product', 'Radar'], ['pmap', 'Map'], ['ptime', 'Timeline'], ['pstruct', 'Structure']];
+var MKTTABS = [['markets', 'List'], ['map', 'Map'], ['links', 'Links']];
+
+/* =========================================================== LEARN */
+var learnSel = 'l1';
+function viewLearn() {
+  var L = window.DATA_LEARN;
+  var h = '<div class="page-head"><div class="eyebrow">Learn the product</div>' +
+    '<h1>The product, explained</h1>' +
+    '<p>Seven short lessons and a decoder. Written for someone who has to hold a conversation with a product team, ' +
+    'not build the thing. Every idea ends in a question you can actually ask.</p></div>';
+
+  h += subtabs([['learn', 'Lessons'], ['glossary', 'Decoder']], 'learn');
+
+  var done = S.learnDone || {};
+  var nDone = L.lessons.filter(function (l) { return done[l.id]; }).length;
+
+  h += '<div class="grid g-side">';
+  /* lesson list */
+  h += '<div><div class="card"><div class="card-head"><h2>Lessons</h2>' +
+    '<span class="sub">' + nDone + ' of ' + L.lessons.length + ' read</span></div>' +
+    '<ul class="list-plain">' + L.lessons.map(function (l, i) {
+      return '<li class="clickable' + (learnSel === l.id ? ' on' : '') + '" data-lesson="' + esc(l.id) + '">' +
+        '<div class="li-top"><span class="t">' + (done[l.id] ? '✓ ' : (i + 1) + '. ') + esc(l.title) + '</span>' +
+        '<span class="pill ghost">' + l.mins + ' min</span></div>' +
+        '<div class="li-sub">' + esc(l.hook) + '</div></li>';
+    }).join('') + '</ul></div>';
+
+  var les = null;
+  L.lessons.forEach(function (l) { if (l.id === learnSel) les = l; });
+  if (les) {
+    h += '<div class="card" style="margin-top:16px"><div class="card-head"><h2>' + esc(les.title) + '</h2>' +
+      '<span class="sub">' + les.mins + ' min read</span></div><div class="card-pad lesson">' +
+      les.blocks.map(renderBlock).join('') +
+      '<div class="divider"></div><div class="btn-row">' +
+      '<button class="btn ' + (done[les.id] ? '' : 'btn-primary') + '" data-act="lesson-done" data-id="' + esc(les.id) + '">' +
+      (done[les.id] ? '✓ Marked as read' : 'Mark as read') + '</button>' +
+      (nextLesson(les.id) ? '<button class="btn" data-lesson="' + esc(nextLesson(les.id)) + '">Next lesson →</button>' : '') +
+      '</div></div></div>';
+  }
+  h += '</div>';
+
+  /* sidebar */
+  h += '<div><div class="card card-pad"><div class="eyebrow">Where this leads</div>' +
+    '<div style="font-size:13px;line-height:1.65;margin-top:6px">Once a lesson clicks, the matching view in this app stops being a wall of tickets:</div>' +
+    '<div style="margin-top:10px">' +
+    [['Lesson 2 →','#/pstruct','Structure — the full sitemap and feature inventory'],
+     ['Lesson 4 →','#/ptime','Timeline — what is built, being built, or still a spike'],
+     ['Lesson 6 →','#/pmap','Product map — click any category for the questions to ask'],
+     ['Lesson 7 →','#/product','Radar — the live items, ranked by what needs you']].map(function (r) {
+      return '<a href="' + r[1] + '" style="display:block;padding:9px 0;border-bottom:1px solid var(--line);text-decoration:none">' +
+        '<span class="src" style="font-weight:700">' + esc(r[0]) + '</span><br>' +
+        '<span style="font-size:12.5px;color:var(--ink)">' + esc(r[2]) + '</span></a>';
+    }).join('') + '</div></div>';
+
+  h += '<div class="card card-pad" style="margin-top:14px"><div class="eyebrow">If you remember one thing</div>' +
+    '<div class="note-box" style="margin-top:8px">A guideline built into the component is met by every market that uses it. ' +
+    'A guideline written in a recommendation is met by the markets that had time to read it.</div></div></div>';
+
+  h += '</div>';
+  return h;
+}
+function nextLesson(id) {
+  var L = window.DATA_LEARN.lessons;
+  for (var i = 0; i < L.length - 1; i++) if (L[i].id === id) return L[i + 1].id;
+  return null;
+}
+function renderBlock(b) {
+  if (b.t === 'p') return '<p>' + esc(b.v) + '</p>';
+  if (b.t === 'h') return '<h3>' + esc(b.v) + '</h3>';
+  if (b.t === 'callout') return '<div class="note-box"><strong>' + esc(b.k) + '.</strong> ' + esc(b.v) + '</div>';
+  if (b.t === 'list') return '<ul>' + b.v.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>';
+  if (b.t === 'cards') return '<div class="grid g-2" style="margin:12px 0">' + b.v.map(function (c) {
+    return '<div class="card card-pad" style="box-shadow:none;background:var(--surface-2)">' +
+      '<div style="font-weight:650;font-size:13px;margin-bottom:5px">' + esc(c.k) + '</div>' +
+      '<div class="src" style="line-height:1.6">' + esc(c.v) + '</div></div>';
+  }).join('') + '</div>';
+  if (b.t === 'steps') return '<div style="margin:12px 0">' + b.v.map(function (s) {
+    return '<div style="padding:11px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="font-weight:650;font-size:13px;color:var(--accent)">' + esc(s.k) + '</div>' +
+      '<div style="font-size:13px;line-height:1.6;margin-top:3px">' + esc(s.v) + '</div></div>';
+  }).join('') + '</div>';
+  if (b.t === 'ask') return '<div style="margin:12px 0">' + b.v.map(function (a) {
+    return '<div class="card card-pad" style="box-shadow:none;background:var(--surface-2);margin-bottom:8px">' +
+      '<div style="font-weight:650;font-size:13px;margin-bottom:6px">' + esc(a.k) + '</div>' +
+      '<ul style="margin:0;padding-left:18px">' + a.qs.map(function (q) {
+        return '<li style="font-size:12.5px;line-height:1.6">' + esc(q) + '</li>';
+      }).join('') + '</ul></div>';
+  }).join('') + '</div>';
+  if (b.t === 'table') return '<div class="tbl-wrap" style="margin:12px 0"><table class="tbl"><thead><tr>' +
+    b.head.map(function (x) { return '<th>' + esc(x) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+    b.rows.map(function (r) {
+      return '<tr>' + r.map(function (c) { return '<td>' + esc(c) + '</td>'; }).join('') + '</tr>';
+    }).join('') + '</tbody></table></div>';
+  if (b.t === 'quiz') return '<details class="quiz"><summary><strong>Check yourself.</strong> ' + esc(b.q) + '</summary>' +
+    '<div class="quiz-a">' + esc(b.a) + '</div></details>';
+  if (b.t === 'diagram') return diagram(b.v);
+  return '';
+}
+
+/* --------------------------------------------------------- diagrams */
+function diagram(kind) {
+  if (kind === 'stack') {
+    var sats = [
+      { x: 60,  y: 30,  w: 150, t: 'Veeva',            s: 'approved content, events' },
+      { x: 60,  y: 130, w: 150, t: 'Reltio / IQVIA',   s: 'is this a real HCP?' },
+      { x: 60,  y: 230, w: 150, t: 'Swiss Rx Login',   s: 'the gate itself' },
+      { x: 590, y: 30,  w: 150, t: 'MCP',              s: 'which cards to show' },
+      { x: 590, y: 130, w: 150, t: 'Kaltura',          s: 'video' },
+      { x: 590, y: 230, w: 150, t: 'Analytics + GSC',  s: 'did it work?' }
+    ];
+    var s = '<div class="dgm"><svg viewBox="0 0 800 340" role="img" aria-label="How a One AZ page is assembled">';
+    s += '<rect x="300" y="110" width="200" height="120" rx="10" class="d-core"/>' +
+      '<text x="400" y="158" class="d-t d-ct">AEM</text>' +
+      '<text x="400" y="180" class="d-s d-ct">builds and publishes</text>' +
+      '<text x="400" y="198" class="d-s d-ct">the page</text>';
+    sats.forEach(function (b) {
+      var right = b.x > 400;
+      var cx = right ? b.x : b.x + b.w, cy = b.y + 28;
+      s += '<rect x="' + b.x + '" y="' + b.y + '" width="' + b.w + '" height="56" rx="8" class="d-box"/>' +
+        '<text x="' + (b.x + b.w / 2) + '" y="' + (b.y + 24) + '" class="d-t d-ct">' + esc(b.t) + '</text>' +
+        '<text x="' + (b.x + b.w / 2) + '" y="' + (b.y + 42) + '" class="d-s d-ct">' + esc(b.s) + '</text>' +
+        '<path d="M' + cx + ' ' + cy + ' L' + (right ? 500 : 300) + ' 170" class="d-line"/>';
+    });
+    s += '<rect x="300" y="270" width="200" height="46" rx="8" class="d-out"/>' +
+      '<text x="400" y="290" class="d-t d-ct">The page a crawler gets</text>' +
+      '<text x="400" y="307" class="d-s d-ct">this is the only thing we can influence</text>' +
+      '<path d="M400 230 L400 270" class="d-line d-strong"/>';
+    s += '</svg><div class="src">Everything on the left decides who is let in. Everything on the right decides what is added afterwards. ' +
+      'AEM is where a requirement has to land to reach the page.</div></div>';
+    return s;
+  }
+  if (kind === 'sitemap') {
+    var T = window.DATA_SITEMAP.tree;
+    var s = '<div class="dgm tree">';
+    T.forEach(function (n) {
+      s += '<div class="tn tn-l1 t-' + n.type + '"><span class="tn-lvl">L' + n.lvl + '</span>' +
+        '<span class="tn-name">' + esc(n.label) + '</span>' +
+        '<span class="pill ' + (n.type === 'page' ? 'ok' : n.type === 'link' ? 'info' : 'ghost') + '">' +
+        (n.type === 'page' ? 'content page' : n.type === 'link' ? 'link level' : 'navigation only') + '</span>' +
+        (n.req ? '<span class="pill accent">mandatory</span>' : '') + '</div>';
+      (n.kids || []).forEach(function (k) {
+        s += '<div class="tn tn-l2 t-' + k.type + '"><span class="tn-lvl">L' + k.lvl + '</span>' +
+          '<span class="tn-name">' + esc(k.label) + '</span>' +
+          '<span class="pill ' + (k.type === 'page' ? 'ok' : k.type === 'link' ? 'info' : 'ghost') + '">' +
+          (k.type === 'page' ? 'content page' : k.type === 'link' ? 'link level' : 'navigation only') + '</span>' +
+          (k.req ? '' : '<span class="pill ghost">optional</span>') +
+          (k.url ? '<span class="mono src" style="margin-left:auto">' + esc(k.url) + '</span>' : '') + '</div>';
+      });
+    });
+    s += '</div><div class="src">Green carries a URL. Grey is a menu label with nothing behind it — it never appears in a URL or a breadcrumb.</div>';
+    return s;
+  }
+  if (kind === 'pi') {
+    var pi = S.pi;
+    var s = '<div class="dgm"><div class="pi-row">';
+    pi.sprints.forEach(function (sp) {
+      s += '<div class="pi-sp"><div class="pi-n">Sprint ' + sp.n + '</div><div class="pi-d">' + esc(sp.dates) + '</div></div>';
+    });
+    s += '</div><div class="pi-bar"><span class="pi-mark" style="left:8%">PI planning<br><b>14–16 Jul</b></span>' +
+      '<span class="pi-mark" style="left:44%">Release<br><b>20 Aug</b></span>' +
+      '<span class="pi-mark" style="left:76%">Release<br><b>17 Sep</b></span></div>' +
+      '<div class="src" style="margin-top:34px">The whole increment is agreed in three days in July. Anything you want in the next one has to be raised before its planning session, not after.</div></div>';
+    return s;
+  }
+  return '';
+}
+
+/* ------------------------------------------------------------ GLOSSARY */
+var glosQ = '';
+function viewGlossary() {
+  var L = window.DATA_LEARN;
+  var h = '<div class="page-head"><div class="eyebrow">Learn the product</div><h1>The decoder</h1>' +
+    '<p>Every acronym and system name that comes up in a One AZ conversation, what it actually is, and whether you need to care.</p></div>';
+  h += subtabs([['learn', 'Lessons'], ['glossary', 'Decoder']], 'glossary');
+  h += '<div class="filters"><input type="search" id="glos-q" placeholder="Search the decoder…" value="' + esc(glosQ) + '" style="min-width:280px">' +
+    '<span class="spacer"></span><span class="src">' + L.glossary.length + ' terms</span></div>';
+
+  L.glossaryGroups.forEach(function (g) {
+    var items = L.glossary.filter(function (t) {
+      if (t.g !== g.id) return false;
+      if (!glosQ) return true;
+      return (t.t + ' ' + t.d + ' ' + t.why).toLowerCase().indexOf(glosQ.toLowerCase()) >= 0;
+    });
+    if (!items.length) return;
+    h += '<div class="section"><h2>' + esc(g.label) + '</h2><div class="grid g-2">' +
+      items.map(function (t) {
+        return '<div class="card card-pad"><div style="font-weight:650;font-size:14px;margin-bottom:6px">' + esc(t.t) + '</div>' +
+          '<div style="font-size:13px;line-height:1.6">' + esc(t.d) + '</div>' +
+          '<div class="note-box" style="margin-top:10px;font-size:12px"><strong>Why you care.</strong> ' + esc(t.why) + '</div></div>';
+      }).join('') + '</div></div>';
+  });
+  return h;
+}
+
+/* =========================================================== TIMELINE */
+var tlFilter = '';
+function viewTimeline() {
+  var E = window.DATA_EXPLAIN, V = window.DATA_VIEWS;
+  var h = '<div class="page-head"><div class="eyebrow">Product side</div><h1>Rollout timeline</h1>' +
+    '<p>What is already in production, what is being built now, and what is still just an investigation. ' +
+    'The earlier something is in this list, the cheaper it is to influence.</p></div>';
+  h += subtabs(PRODTABS, 'ptime');
+
+  var order = ['live', 'building', 'spike', 'blocked', 'planned'];
+  var counts = {};
+  S.product.forEach(function (p) {
+    var r = (p.rollout || 'planned'); counts[r] = (counts[r] || 0) + 1;
+  });
+
+  h += '<div class="grid g-' + Math.min(5, order.length) + '" style="grid-template-columns:repeat(5,1fr)">' +
+    order.map(function (k) {
+      var d = E.rolloutStates[k];
+      return '<div class="card stat clickable' + (tlFilter === k ? ' alert' : '') + '" data-tlf="' + k + '">' +
+        '<div class="k num">' + (counts[k] || 0) + '</div><div class="l">' + esc(d[1]) + '</div>' +
+        '<div class="f">' + esc(d[2]) + '</div></div>';
+    }).join('') + '</div>';
+
+  /* sprint board */
+  h += '<div class="section"><h2>Across the ' + esc(S.pi.name) + '</h2>' +
+    '<p class="src" style="margin:-6px 0 12px">' + esc(S.pi.window) + ' · planned ' + esc(S.pi.planned) +
+    ' · releases ' + S.pi.releases.map(esc).join(' and ') + '</p>';
+
+  var buckets = { 'Q2 spill-over': [], 'Q3 features': [], 'Live / standing': [], 'Other': [] };
+  S.product.forEach(function (p) {
+    if (tlFilter && (p.rollout || 'planned') !== tlFilter) return;
+    var s = String(p.sprint || '');
+    var b = /spill/i.test(s) ? 'Q2 spill-over'
+      : /Q3 features/i.test(s) ? 'Q3 features'
+      : /live|standing/i.test(s) ? 'Live / standing' : 'Other';
+    buckets[b].push(p);
+  });
+
+  h += '<div class="grid g-4">' + Object.keys(buckets).map(function (b) {
+    var list = buckets[b];
+    return '<div class="card"><div class="card-head"><h2>' + esc(b) + '</h2><span class="sub">' + list.length + '</span></div>' +
+      (list.length ? '<ul class="list-plain">' + list.sort(function (a, c) {
+        var rk = { high: 0, medium: 1, low: 2 };
+        return (rk[a.seo] === undefined ? 3 : rk[a.seo]) - (rk[c.seo] === undefined ? 3 : rk[c.seo]);
+      }).map(function (p) {
+        var r = E.rolloutStates[p.rollout || 'planned'];
+        return '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '">' +
+          '<div class="li-top"><span class="t" style="font-size:12.5px">' + esc(p.title) + '</span></div>' +
+          '<div class="li-sub"><span class="mono">' + esc(p.id) + '</span> ' +
+          '<span class="pill ' + r[0] + '">' + esc(r[1]) + '</span> ' +
+          '<span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + esc(p.seo) + '</span></div></li>';
+      }).join('') + '</ul>' : '<div class="empty">Nothing here.</div>') + '</div>';
+  }).join('') + '</div></div>';
+
+  /* rolled out where */
+  h += '<div class="section"><h2>Rolled out where</h2>' +
+    '<p class="src" style="margin:-6px 0 12px">Only the items with a known market footprint. Everything else is either cross-market or not yet anywhere.</p>' +
+    '<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+    '<th>Item</th><th>State</th><th>Since</th><th>Markets</th><th>Note</th></tr></thead><tbody>';
+  var any = false;
+  S.product.forEach(function (p) {
+    var ro = E.rollout[p.id];
+    if (!ro || !ro.where || !ro.where.length) return;
+    if (tlFilter && (p.rollout || 'planned') !== tlFilter) return;
+    any = true;
+    var r = E.rolloutStates[p.rollout || 'planned'];
+    h += '<tr class="clickable" data-open="product" data-id="' + esc(p.id) + '">' +
+      '<td><div class="t">' + esc(p.title) + '</div><div class="d mono">' + esc(p.id) + '</div></td>' +
+      '<td><span class="pill ' + r[0] + '">' + esc(r[1]) + '</span></td>' +
+      '<td class="src nowrap">' + (ro.since ? fmt(ro.since) : '—') + '</td>' +
+      '<td class="src">' + ro.where.map(function (c) { return c === 'ALL' ? 'all markets' : esc(c); }).join(', ') + '</td>' +
+      '<td class="src">' + esc(ro.note || '') + '</td></tr>';
+  });
+  if (!any) h += '<tr><td colspan="5"><div class="empty">Nothing matches.</div></td></tr>';
+  h += '</tbody></table></div></div></div>';
+  return h;
+}
+
+/* ========================================================== STRUCTURE */
+var stTab = 'tree', stMarket = '';
+function viewStructure() {
+  var D = window.DATA_SITEMAP;
+  var h = '<div class="page-head"><div class="eyebrow">Product side</div><h1>Structure and features</h1>' +
+    '<p>What a One AZ site is made of: the standard sitemap every portal follows, the full component and feature inventory, ' +
+    'and what each market has actually built on top of it.</p></div>';
+  h += subtabs(PRODTABS, 'pstruct');
+  h += '<div class="filters">' +
+    [['tree', 'The sitemap'], ['features', 'Feature inventory'], ['profiles', 'What each market has']].map(function (t) {
+      return '<button class="btn btn-sm' + (stTab === t[0] ? ' btn-primary' : '') + '" data-sttab="' + t[0] + '">' + esc(t[1]) + '</button>';
+    }).join('') + '</div>';
+
+  if (stTab === 'tree') {
+    h += '<div class="note-box" style="margin-bottom:16px">' + esc(D.docNote) + '</div>';
+    h += '<div class="grid g-side"><div class="card card-pad">';
+    D.tree.forEach(function (n) {
+      h += '<div class="st-node clickable" data-stnode="' + esc(n.id) + '">' +
+        '<div class="li-top"><div><span class="tn-lvl">L' + n.lvl + '</span> <strong>' + esc(n.label) + '</strong></div>' +
+        '<span class="nowrap"><span class="pill ' + (n.type === 'page' ? 'ok' : n.type === 'link' ? 'info' : 'ghost') + '">' +
+        (n.type === 'page' ? 'content page' : n.type === 'link' ? 'link level' : 'navigation only') + '</span>' +
+        (n.req ? '<span class="pill accent">mandatory</span>' : '<span class="pill ghost">optional</span>') + '</span></div>' +
+        '<div class="src" style="margin-top:4px">' + esc(n.note) + '</div></div>';
+      (n.kids || []).forEach(function (k) {
+        h += '<div class="st-node st-kid clickable" data-stnode="' + esc(k.id) + '">' +
+          '<div class="li-top"><div><span class="tn-lvl">L' + k.lvl + '</span> ' + esc(k.label) +
+          (k.url ? ' <span class="mono src">' + esc(k.url) + '</span>' : '') + '</div>' +
+          '<span class="nowrap"><span class="pill ' + (k.type === 'page' ? 'ok' : k.type === 'link' ? 'info' : 'ghost') + '">' +
+          (k.type === 'page' ? 'content page' : k.type === 'link' ? 'link level' : 'navigation only') + '</span>' +
+          (k.req ? '' : '<span class="pill ghost">optional</span>') + '</span></div>' +
+          (k.tabs ? '<div class="src" style="margin-top:5px">Sub-sections: ' + k.tabs.map(esc).join(' · ') + '</div>' : '') +
+          '</div>';
+      });
+    });
+    h += '</div><div><div class="card card-pad"><div class="eyebrow">The rules that bind it</div>' +
+      D.navRules.map(function (r) {
+        return '<div style="padding:9px 0;border-bottom:1px solid var(--line)">' +
+          '<div class="src" style="text-transform:uppercase;letter-spacing:.05em;font-weight:700">' + esc(r.k) + '</div>' +
+          '<div style="font-size:12.5px;line-height:1.5">' + esc(r.v) + '</div></div>';
+      }).join('') + '</div>' +
+      '<div class="card card-pad" style="margin-top:14px"><div class="eyebrow">How to read it</div>' +
+      '<div style="font-size:12.5px;line-height:1.6;margin-top:6px">Click any level for the SEO read on it. ' +
+      '<span class="pill ok">content page</span> carries a URL. <span class="pill ghost">navigation only</span> is a menu label ' +
+      'that never appears in a URL or a breadcrumb — the rule most often broken.</div></div></div></div>';
+  }
+
+  if (stTab === 'features') {
+    var E = window.DATA_EXPLAIN;
+    h += '<p class="src" style="max-width:78ch;margin:-4px 0 14px">Every component and feature known to be part of One AZ, ' +
+      'grouped by what it does. Click one for the detail and the questions to ask.</p>';
+    D.featureGroups.forEach(function (g) {
+      var fs = D.features.filter(function (f) { return f.group === g; });
+      if (!fs.length) return;
+      h += '<div class="section"><h2>' + esc(g) + '</h2><div class="grid g-3">' +
+        fs.map(function (f) {
+          var st = E.rolloutStates[f.state] || ['ghost', f.state, ''];
+          return '<div class="card card-pad clickable" data-feat="' + esc(f.id) + '">' +
+            '<div class="li-top" style="align-items:flex-start"><strong style="font-size:13.5px">' + esc(f.name) + '</strong>' +
+            '<span class="pill ' + (f.state === 'standard' ? 'teal' : f.state === 'incident' ? 'risk' : st[0]) + '">' +
+            (f.state === 'standard' ? 'in the standard' : f.state === 'incident' ? 'incident' : st[1]) + '</span></div>' +
+            '<div class="src" style="margin:7px 0 0;line-height:1.55">' + esc(f.what) + '</div>' +
+            (f.item ? '<div class="src mono" style="margin-top:7px">' + esc(f.item) + '</div>' : '') +
+            '</div>';
+        }).join('') + '</div></div>';
+    });
+  }
+
+  if (stTab === 'profiles') {
+    h += '<p class="src" style="max-width:78ch;margin:-4px 0 14px">Built from what has actually been delivered in each market — ' +
+      'the sites were not crawled, so this is the shape of the work, not a page-by-page audit.</p>';
+    h += '<div class="grid g-2">' + Object.keys(D.profiles).map(function (code) {
+      var p = D.profiles[code], m = byId2(S.markets, code);
+      return '<div class="card"><div class="card-head"><h2>' + esc(m ? m.name : code) + '</h2>' +
+        '<a class="btn btn-ghost btn-sm" href="#/markets/' + esc(code) + '">Open market</a></div>' +
+        '<div class="card-pad">' +
+        '<div class="def" style="grid-template-columns:96px 1fr;font-size:12.5px">' +
+        '<dt>Languages</dt><dd>' + p.langs.map(esc).join(', ') + '</dd>' +
+        '<dt>Gating</dt><dd>' + esc(p.gating) + '</dd>' +
+        '<dt>Areas</dt><dd>' + p.tas.map(esc).join(' · ') + '</dd>' +
+        (p.brands && p.brands[0] !== '—' ? '<dt>Brands</dt><dd>' + p.brands.map(esc).join(', ') + '</dd>' : '') +
+        '<dt>Scale</dt><dd>' + esc(p.scale) + '</dd></div>' +
+        '<div class="divider"></div><div style="font-size:13px;line-height:1.6">' + esc(p.structure) + '</div>' +
+        '<ul style="margin:10px 0 0;padding-left:18px;font-size:12.5px;line-height:1.6">' +
+        p.notable.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('') + '</ul>' +
+        '</div></div>';
+    }).join('') + '</div>';
+  }
+  return h;
+}
+
+/* ============================================================== LINKS */
+function viewLinks() {
+  var D = window.DATA_SITEMAP;
+  var h = '<div class="page-head"><div class="eyebrow">Market side</div><h1>Links</h1>' +
+    '<p>Every One AZ property, with its robots file, sitemap and index check one click away. ' +
+    'Add your own links per market — Search Console, staging, AEM author, whatever you actually open.</p></div>';
+  h += subtabs(MKTTABS, 'links');
+
+  h += '<div class="card card-pad" style="margin-bottom:16px"><div class="eyebrow">Standing links</div>' +
+    '<div class="grid g-3" style="margin-top:10px">' +
+    (S.sharedLinks || []).map(function (l, i) {
+      return '<div class="card card-pad" style="box-shadow:none;background:var(--surface-2)">' +
+        '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + esc(l.n) + '</div>' +
+        (l.u ? '<a href="' + esc(l.u) + '" target="_blank" rel="noreferrer" class="mono" style="font-size:11.5px;word-break:break-all">' + esc(l.u.slice(0, 60)) + '…</a>'
+             : '<span class="pill ghost">no URL yet</span>') +
+        '<div class="src" style="margin-top:6px;line-height:1.5">' + esc(l.note || '') + '</div>' +
+        '<button class="btn btn-sm btn-ghost" style="margin-top:8px" data-act="edit-shared" data-id="' + i + '">Edit</button>' +
+        '</div>';
+    }).join('') + '</div></div>';
+
+  h += '<div class="note-box warn" style="margin-bottom:16px">' + esc(D.siteNote) + '</div>';
+
+  var order = S.markets.filter(function (m) { return (S.marketSites && S.marketSites[m.code]) && S.marketSites[m.code].length; });
+  order.forEach(function (m) {
+    var sites = S.marketSites[m.code] || [];
+    var extra = (S.marketLinks && S.marketLinks[m.code]) || [];
+    h += '<div class="section"><div class="li-top" style="margin-bottom:8px">' +
+      '<h2 style="margin:0"><a href="#/markets/' + esc(m.code) + '" style="text-decoration:none">' + esc(m.name) + '</a></h2>' +
+      '<button class="btn btn-sm" data-act="edit-links" data-id="' + esc(m.code) + '">Edit links</button></div>' +
+      '<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+      '<th>Property</th><th>Live</th><th>Technical</th><th>Index check</th></tr></thead><tbody>';
+    sites.forEach(function (s) {
+      var origin = '';
+      try { origin = new URL(s.u).origin; } catch (e) { origin = s.u.replace(/\/[^/]*$/, ''); }
+      var host = origin.replace(/^https?:\/\//, '');
+      h += '<tr><td><div class="t">' + esc(s.n) + '</div><div class="d mono">' + esc(host) + '</div></td>' +
+        '<td><a href="' + esc(s.u) + '" target="_blank" rel="noreferrer">Open site ↗</a></td>' +
+        '<td class="nowrap"><a href="' + esc(origin) + '/robots.txt" target="_blank" rel="noreferrer">robots.txt</a> · ' +
+        '<a href="' + esc(origin) + '/sitemap.xml" target="_blank" rel="noreferrer">sitemap.xml</a></td>' +
+        '<td class="nowrap"><a href="https://www.google.com/search?q=site%3A' + encodeURIComponent(host) +
+        '" target="_blank" rel="noreferrer">site: search ↗</a> · ' +
+        '<a href="https://search.google.com/search-console?resource_id=' + encodeURIComponent(origin) +
+        '" target="_blank" rel="noreferrer">GSC ↗</a></td></tr>';
+    });
+    extra.forEach(function (l) {
+      h += '<tr><td><div class="t">' + esc(l.n) + '</div><div class="d src">added by you</div></td>' +
+        '<td colspan="3">' + (l.u ? '<a href="' + esc(l.u) + '" target="_blank" rel="noreferrer" class="mono" style="word-break:break-all">' + esc(l.u) + '</a>' : '<span class="src">—</span>') + '</td></tr>';
+    });
+    h += '</tbody></table></div></div></div>';
+  });
+  return h;
+}
+
+function drawerLinks(code) {
+  var m = byId2(S.markets, code);
+  var sites = (S.marketSites && S.marketSites[code]) || [];
+  var extra = (S.marketLinks && S.marketLinks[code]) || [];
+  var h = '<div class="drawer-head"><div><h2>Links — ' + esc(m ? m.name : code) + '</h2>' +
+    '<div class="meta">One per line, as <span class="mono">Name | URL</span></div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="field"><label>Properties</label><textarea name="sites" style="min-height:110px">' +
+    esc(sites.map(function (s) { return s.n + ' | ' + s.u; }).join('\n')) + '</textarea>' +
+    '<div class="hint">These get the robots, sitemap and index-check links generated for them automatically.</div></div>' +
+    '<div class="field"><label>Your own links</label><textarea name="extra" style="min-height:150px" placeholder="Search Console | https://…&#10;Staging | https://…&#10;AEM author | https://…&#10;Migration tracking list | https://…">' +
+    esc(extra.map(function (s) { return s.n + ' | ' + s.u; }).join('\n')) + '</textarea></div>' +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Cancel</button>' +
+    '<button class="btn btn-primary" data-act="save-links" data-id="' + esc(code) + '">Save</button></div>';
+  openDrawer(h);
+}
+function drawerShared(i) {
+  var l = (S.sharedLinks || [])[i];
+  if (!l) return;
+  var h = '<div class="drawer-head"><div><h2>' + esc(l.n) + '</h2><div class="meta">Standing link</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="field"><label>Name</label><input type="text" name="n" value="' + esc(l.n) + '"></div>' +
+    '<div class="field"><label>URL</label><input type="text" name="u" value="' + esc(l.u || '') + '"></div>' +
+    '<div class="field"><label>Note</label><textarea name="note">' + esc(l.note || '') + '</textarea></div>' +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Cancel</button>' +
+    '<button class="btn btn-primary" data-act="save-shared" data-id="' + i + '">Save</button></div>';
+  openDrawer(h);
+}
+
+/* ============================================ DEEP DIVE DRAWERS */
+function drawerCat(id, subId) {
+  var V = window.DATA_VIEWS, E = window.DATA_EXPLAIN;
+  var c = null; V.categories.forEach(function (x) { if (x.id === id) c = x; });
+  if (!c) return;
+  var sub = null; (c.subs || []).forEach(function (s) { if (s.id === subId) sub = s; });
+  var ex = sub ? E.sub[subId] : E.cat[id];
+  if (!ex) ex = E.cat[id] || {};
+  var CARE = { core: 'risk', watch: 'warn', light: 'ghost' };
+  var title = sub ? sub.title : c.title;
+  var care = sub ? sub.care : c.care;
+
+  var h = '<div class="drawer-head"><div><h2>' + (sub ? '' : c.icon + '&nbsp; ') + esc(title) + '</h2>' +
+    '<div class="meta">' + (sub ? esc(c.title) + ' · ' : '') + 'product category</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">';
+
+  h += '<div class="btn-row" style="margin-bottom:14px"><span class="pill ' + CARE[care] + '">' + esc(care) + '</span></div>';
+  h += '<div class="eyebrow">In plain terms</div><div class="prose"><p>' + esc(ex.plain || c.blurb) + '</p></div>';
+
+  if (ex.flow && ex.flow.length) {
+    h += '<div class="divider"></div><div class="eyebrow">How it works</div>' +
+      '<div class="flow">' + ex.flow.map(function (f, i) {
+        return '<div class="flow-s"><span class="flow-n">' + (i + 1) + '</span><span>' + esc(f) + '</span></div>';
+      }).join('') + '</div>';
+  }
+
+  h += '<div class="divider"></div><div class="note-box"><strong>Why it reaches us.</strong> ' + esc(ex.care || c.stake) + '</div>';
+
+  if (ex.watch) h += '<div class="note-box warn" style="margin-top:10px"><strong>Watch.</strong> ' + esc(ex.watch) + '</div>';
+
+  if (ex.ask && ex.ask.length) {
+    h += '<div class="divider"></div><div class="eyebrow">What to ask</div>' +
+      '<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.7">' +
+      ex.ask.map(function (q) { return '<li>' + esc(q) + '</li>'; }).join('') + '</ul>';
+  }
+
+  /* sub-categories */
+  if (!sub && c.subs && c.subs.length) {
+    h += '<div class="divider"></div><div class="eyebrow">Inside this category</div>';
+    c.subs.forEach(function (s) {
+      var items = S.product.filter(function (p) { return (V.itemCat[p.id] || [])[1] === s.id; });
+      h += '<div class="clickable" data-catdive="' + esc(c.id) + '|' + esc(s.id) + '" ' +
+        'style="padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer">' +
+        '<div class="li-top"><strong style="font-size:13px">' + esc(s.title) + '</strong>' +
+        '<span class="nowrap"><span class="pill ' + CARE[s.care] + '">' + s.care + '</span>' +
+        '<span class="pill ghost">' + items.length + '</span></span></div>' +
+        '<div class="src" style="margin-top:3px">' + esc(s.note) + '</div></div>';
+    });
+  }
+
+  /* items */
+  var its = S.product.filter(function (p) {
+    var m = V.itemCat[p.id] || [];
+    return sub ? m[1] === subId : m[0] === id;
+  });
+  if (its.length) {
+    h += '<div class="divider"></div><div class="eyebrow">Live items here</div><ul class="list-plain">' +
+      its.map(function (p) {
+        var r = E.rolloutStates[p.rollout || 'planned'];
+        return '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '" style="padding:10px 0">' +
+          '<div class="li-top"><span class="t" style="font-size:13px">' + esc(p.title) + '</span>' +
+          '<span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + esc(p.seo) + '</span></div>' +
+          '<div class="li-sub mono">' + esc(p.id) + ' · <span class="pill ' + r[0] + '">' + esc(r[1]) + '</span></div></li>';
+      }).join('') + '</ul>';
+  }
+
+  h += '</div><div class="drawer-foot">' +
+    (sub ? '<button class="btn" data-catdive="' + esc(c.id) + '|">← ' + esc(c.title) + '</button>' : '') +
+    '<button class="btn" data-act="close">Close</button></div>';
+  openDrawer(h);
+}
+
+function drawerZone(id) {
+  var V = window.DATA_VIEWS, C = window.CHECKLIST;
+  var z = null; V.anatomy.forEach(function (a) { if (a.id === id) z = a; });
+  if (!z) return;
+  var CARE = { core: 'risk', watch: 'warn', light: 'ghost' };
+  var h = '<div class="drawer-head"><div><h2>' + z.n + '. ' + esc(z.label) + '</h2>' +
+    '<div class="meta">page region</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="btn-row" style="margin-bottom:14px"><span class="pill ' + CARE[z.care] + '">' + z.care + '</span></div>' +
+    '<div class="eyebrow">What sits here</div><div class="prose"><p>' + esc(z.what) + '</p></div>' +
+    '<div class="note-box"><strong>SEO / GEO read.</strong> ' + esc(z.seo) + '</div>';
+
+  var its = z.items.map(function (i) { return byId(S.product, i); }).filter(Boolean);
+  if (its.length) {
+    h += '<div class="divider"></div><div class="eyebrow">Product items touching this region</div><ul class="list-plain">' +
+      its.map(function (p) {
+        var r = (window.DATA_EXPLAIN.rolloutStates[p.rollout || 'planned']) || ['ghost', ''];
+        return '<li class="clickable" data-open="product" data-id="' + esc(p.id) + '" style="padding:10px 0">' +
+          '<div class="li-top"><span class="t" style="font-size:13px">' + esc(p.title) + '</span>' +
+          '<span class="pill ' + (SEV[p.seo] || 'ghost') + '">' + esc(p.seo) + '</span></div>' +
+          '<div class="li-sub mono">' + esc(p.id) + ' · <span class="pill ' + r[0] + '">' + esc(r[1]) + '</span></div></li>';
+      }).join('') + '</ul>';
+  }
+  var qs = [];
+  C.groups.forEach(function (g) { g.items.forEach(function (it) { if (z.check.indexOf(it.id) >= 0) qs.push(it); }); });
+  if (qs.length) {
+    h += '<div class="divider"></div><div class="eyebrow">Ask before it ships</div>' +
+      '<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.7">' +
+      qs.map(function (q) {
+        return '<li>' + esc(q.q) + ' <span class="pill ' + (q.w === 'must' ? 'risk' : 'ghost') + '">' + q.w + '</span>' +
+          (q.geo ? ' <span class="pill teal">GEO</span>' : '') + '</li>';
+      }).join('') + '</ul>';
+  }
+  h += '</div><div class="drawer-foot"><button class="btn" data-act="close">Close</button></div>';
+  openDrawer(h);
+}
+
+function drawerFeature(id) {
+  var D = window.DATA_SITEMAP, E = window.DATA_EXPLAIN;
+  var f = null; D.features.forEach(function (x) { if (x.id === id) f = x; });
+  if (!f) return;
+  var st = E.rolloutStates[f.state] || ['ghost', f.state, ''];
+  var h = '<div class="drawer-head"><div><h2>' + esc(f.name) + '</h2>' +
+    '<div class="meta">' + esc(f.group) + (f.item ? ' · ' + esc(f.item) : '') + '</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="btn-row" style="margin-bottom:14px">' +
+    '<span class="pill ' + (f.state === 'standard' ? 'teal' : f.state === 'incident' ? 'risk' : st[0]) + '">' +
+    (f.state === 'standard' ? 'in the standard' : f.state === 'incident' ? 'incident' : st[1]) + '</span></div>' +
+    '<div class="eyebrow">What it is</div><div class="prose"><p>' + esc(f.what) + '</p></div>' +
+    '<div class="note-box"><strong>Why we care.</strong> ' + esc(f.seo) + '</div>' +
+    '<div class="divider"></div><div class="def"><dt>Markets</dt><dd>' +
+    f.markets.map(function (c) { return c === 'ALL' ? 'All markets' : esc(marketName(c)); }).join(', ') + '</dd>' +
+    (st[2] ? '<dt>State</dt><dd>' + esc(st[2]) + '</dd>' : '') + '</div>';
+  if (f.item) {
+    var p = byId(S.product, f.item);
+    if (p) h += '<div class="divider"></div><div class="btn-row">' +
+      '<button class="btn btn-primary btn-sm" data-open="product" data-id="' + esc(p.id) + '">Open ' + esc(p.id) + ' in the radar</button></div>';
+  }
+  h += '</div><div class="drawer-foot"><button class="btn" data-act="close">Close</button></div>';
+  openDrawer(h);
+}
+
+function drawerNode(id) {
+  var D = window.DATA_SITEMAP, n = null;
+  D.tree.forEach(function (t) {
+    if (t.id === id) n = t;
+    (t.kids || []).forEach(function (k) { if (k.id === id) n = k; });
+  });
+  if (!n) return;
+  var h = '<div class="drawer-head"><div><h2>' + esc(n.label) + '</h2>' +
+    '<div class="meta">Level ' + n.lvl + ' · ' +
+    (n.type === 'page' ? 'content page' : n.type === 'link' ? 'link level' : 'navigation only') +
+    ' · ' + (n.req ? 'mandatory' : 'optional') + '</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="prose"><p>' + esc(n.note) + '</p></div>' +
+    '<div class="note-box"><strong>SEO read.</strong> ' + esc(n.seo || '—') + '</div>' +
+    (n.url ? '<div class="divider"></div><div class="eyebrow">URL pattern</div><div class="mono" style="font-size:13px">' + esc(n.url) + '</div>' : '') +
+    (n.tabs ? '<div class="divider"></div><div class="eyebrow">Sub-sections</div><ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.7">' +
+      n.tabs.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+      '<div class="src" style="margin-top:8px">* mandatory. Max 7 tabs, each dropdown max 7 links.</div>' : '') +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Close</button></div>';
+  openDrawer(h);
+}
+
+/* ============================================================== DOCS */
+var docSide = '', docStatus = '';
+function viewDocs() {
+  var D = window.DATA_DOCS;
+  var h = '<div class="page-head"><div class="eyebrow">Output</div><h1>Documents</h1>' +
+    '<p>What this desk produces and where each thing got to — the notes and standards going to the product team on one side, ' +
+    'the briefs and deliverables going to the markets on the other.</p></div>';
+
+  h += '<div class="filters">' +
+    sel('doc-side', docSide, [['', 'Both sides'], ['product', 'Product-facing'], ['market', 'Market-facing'], ['both', 'Serves both']]) +
+    sel('doc-status', docStatus, [['', 'All statuses']].concat(Object.keys(D.statuses).map(function (k) { return [k, D.statuses[k][1]]; }))) +
+    '<span class="spacer"></span>' +
+    '<button class="btn btn-primary btn-sm" data-act="new-doc">+ Log a document</button></div>';
+
+  function lane(side, heading, note) {
+    var rows = S.docs.filter(function (d) {
+      if (side === 'product' && d.side === 'market') return false;
+      if (side === 'market' && d.side === 'product') return false;
+      if (docSide && d.side !== docSide) return false;
+      if (docStatus && d.status !== docStatus) return false;
+      return true;
+    }).sort(function (a, b) {
+      var rk = { idea: 0, drafting: 1, 'in-review': 2, recurring: 3, sent: 4, acknowledged: 5, superseded: 6 };
+      var f = (rk[a.status] || 9) - (rk[b.status] || 9);
+      if (f) return f;
+      return (a.due || 'zz') < (b.due || 'zz') ? -1 : 1;
+    });
+    var x = '<div class="card"><div class="card-head"><h2>' + esc(heading) + '</h2>' +
+      '<span class="sub">' + rows.length + ' · ' + esc(note) + '</span></div>';
+    if (!rows.length) x += '<div class="empty">Nothing matches.</div>';
+    else {
+      x += '<ul class="list-plain">' + rows.map(function (d) {
+        var st = D.statuses[d.status] || ['ghost', d.status];
+        var late = d.due && daysUntil(d.due) < 0 && d.status !== 'sent' && d.status !== 'acknowledged';
+        return '<li class="clickable" data-open="doc" data-id="' + esc(d.id) + '">' +
+          '<div class="li-top"><span class="t">' + esc(d.title) + '</span>' +
+          '<span class="nowrap"><span class="pill ' + st[0] + '">' + esc(st[1]) + '</span>' +
+          (d.side === 'both' ? '<span class="pill accent">both</span>' : '') + '</span></div>' +
+          '<div class="li-sub">' + esc(d.type) + ' · ' + esc(d.owner) +
+          (d.market ? ' · ' + esc(d.market) : '') +
+          (d.due ? ' · due ' + fmt(d.due) + (late ? ' <span class="pill risk">overdue</span>' : '') : '') +
+          '<br>→ ' + esc(d.audience) + '</div></li>';
+      }).join('') + '</ul>';
+    }
+    return x + '</div>';
+  }
+
+  h += '<div class="grid g-2">' +
+    lane('product', 'To the product team', 'requirements in') +
+    lane('market', 'To the SEO team and markets', 'standards out') +
+    '</div>';
+
+  h += '<div class="section"><h2>Where this desk came from</h2>' +
+    '<p class="src" style="margin:-6px 0 12px">The source documents behind everything seeded here.</p>' +
+    '<div class="grid g-2"><div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Document</th><th>What it gave us</th><th>Side</th></tr></thead><tbody>' +
+    D.sources.map(function (s) {
+      return '<tr><td class="t">' + esc(s.t) + '</td><td class="src">' + esc(s.d) + '</td>' +
+        '<td><span class="pill ' + (s.side === 'product' ? 'accent' : s.side === 'market' ? 'info' : 'ghost') + '">' + esc(s.side) + '</span></td></tr>';
+    }).join('') + '</tbody></table></div></div>' +
+    '<div class="card card-pad"><div class="eyebrow">Keeping it current</div>' +
+    '<div style="font-size:13px;line-height:1.65;margin-top:8px">When any of these is reissued, drop the new version into ' +
+    '<a href="#/ingest">Ingest</a>. A tracker re-imports over the top of itself; a deck or a document opens as text you can pull items out of.</div>' +
+    '<div class="btn-row" style="margin-top:12px"><a class="btn btn-sm" href="#/ingest">Open Ingest</a>' +
+    '<a class="btn btn-sm" href="#/brief">Generate a note</a></div></div></div></div>';
+  return h;
+}
+
+function drawerDoc(id) {
+  var D = window.DATA_DOCS, d = byId(S.docs, id);
+  if (!d) return;
+  var h = '<div class="drawer-head"><div><h2>' + esc(d.title) + '</h2>' +
+    '<div class="meta">' + esc(d.type) + ' · ' + esc(d.side === 'both' ? 'both sides' : d.side + '-facing') + '</div></div>' +
+    '<button class="btn btn-ghost" data-act="close">✕</button></div><div class="drawer-body">' +
+    '<div class="prose"><p>' + esc(d.what || '') + '</p></div>' +
+    (d.next ? '<div class="note-box"><strong>Next.</strong> ' + esc(d.next) + '</div>' : '') +
+    '<div class="divider"></div>' +
+    '<div class="field-row"><div class="field"><label>Status</label>' +
+    selN('status', d.status, Object.keys(D.statuses)) + '</div>' +
+    '<div class="field"><label>Side</label>' + selN('side', d.side, ['product', 'market', 'both']) + '</div></div>' +
+    '<div class="field-row"><div class="field"><label>Dated</label><input type="date" name="date" value="' + esc(d.date || '') + '"></div>' +
+    '<div class="field"><label>Due</label><input type="date" name="due" value="' + esc(d.due || '') + '"></div></div>' +
+    '<div class="field-row"><div class="field"><label>Owner</label><input type="text" name="owner" value="' + esc(d.owner || '') + '"></div>' +
+    '<div class="field"><label>Audience</label><input type="text" name="audience" value="' + esc(d.audience || '') + '"></div></div>' +
+    '<div class="field-row"><div class="field"><label>Type</label><input type="text" name="type" value="' + esc(d.type || '') + '"></div>' +
+    '<div class="field"><label>Market</label><input type="text" name="market" value="' + esc(d.market || '') + '" placeholder="blank = cross-market"></div></div>' +
+    '<div class="field"><label>Link</label><input type="text" name="link" value="' + esc(d.link || '') + '" placeholder="SharePoint, Teams, wherever it lives"></div>' +
+    '<div class="field"><label>Title</label><input type="text" name="title" value="' + esc(d.title) + '"></div>' +
+    '<div class="field"><label>What it is</label><textarea name="what">' + esc(d.what || '') + '</textarea></div>' +
+    '<div class="field"><label>Next step</label><textarea name="next">' + esc(d.next || '') + '</textarea></div>' +
+    '<div class="field"><label>Your notes</label><textarea name="notes">' + esc(d.notes || '') + '</textarea></div>' +
+    '<button class="btn btn-danger btn-sm" data-act="del-doc" data-id="' + esc(d.id) + '">Delete</button>' +
+    '</div><div class="drawer-foot"><button class="btn" data-act="close">Cancel</button>' +
+    '<button class="btn btn-primary" data-act="save-doc" data-id="' + esc(d.id) + '">Save</button></div>';
+  openDrawer(h);
+}
+
 /* ============================================================== ROUTER */
 function render() {
   var parts = location.hash.replace(/^#\/?/, '').split('/');
@@ -2127,6 +2865,12 @@ function render() {
   var el = document.getElementById('view');
   var html;
   if (v === 'product') html = viewProduct();
+  else if (v === 'learn') html = viewLearn();
+  else if (v === 'glossary') html = viewGlossary();
+  else if (v === 'ptime') html = viewTimeline();
+  else if (v === 'pstruct') html = viewStructure();
+  else if (v === 'links') html = viewLinks();
+  else if (v === 'docs') html = viewDocs();
   else if (v === 'pmap') html = viewProductMap();
   else if (v === 'map') html = viewMap();
   else if (v === 'markets') html = arg ? viewMarket(decodeURIComponent(arg)) : viewMarkets();
@@ -2183,6 +2927,8 @@ document.addEventListener('click', function (e) {
         p2.why = dv('why'); p2.toMarkets = dv('toMarkets'); p2.toProduct = dv('toProduct');
         var mk = dchecks('markets'); if (mk.length) p2.markets = mk;
         p2.tags = dchecks('tags');
+        p2.rollout = dv('rollout') || p2.rollout;
+        p2.due = dv('due');
       }
       save(); closeDrawer(); render(); toast('Saved'); return;
     }
@@ -2325,6 +3071,60 @@ document.addEventListener('click', function (e) {
       return;
     }
 
+    if (a2 === 'lesson-done') {
+      S.learnDone = S.learnDone || {};
+      S.learnDone[id] = !S.learnDone[id];
+      save(); render(); return;
+    }
+    if (a2 === 'edit-links') { drawerLinks(id); return; }
+    if (a2 === 'save-links') {
+      function parseLines(v) {
+        return v.split('\n').map(function (l) {
+          var i = l.indexOf('|');
+          if (!l.trim()) return null;
+          return i < 0 ? { n: l.trim(), u: '' } : { n: l.slice(0, i).trim(), u: l.slice(i + 1).trim() };
+        }).filter(Boolean);
+      }
+      S.marketSites = S.marketSites || {}; S.marketLinks = S.marketLinks || {};
+      S.marketSites[id] = parseLines(dv('sites'));
+      S.marketLinks[id] = parseLines(dv('extra'));
+      save(); closeDrawer(); render(); toast('Links saved'); return;
+    }
+    if (a2 === 'edit-shared') { drawerShared(+id); return; }
+    if (a2 === 'save-shared') {
+      var sl = S.sharedLinks[+id];
+      if (sl) { sl.n = dv('n') || sl.n; sl.u = dv('u'); sl.note = dv('note'); }
+      save(); closeDrawer(); render(); toast('Saved'); return;
+    }
+    if (a2 === 'new-doc') {
+      var nd2 = { id: uid('doc'), side: 'product', title: 'New document', type: 'Note', status: 'idea',
+        owner: '', audience: '', date: '', due: '', link: '', market: '', what: '', next: '', relates: [] };
+      S.docs.unshift(nd2); save(); render(); drawerDoc(nd2.id); return;
+    }
+    if (a2 === 'save-doc') {
+      var dd = byId(S.docs, id);
+      if (dd) {
+        ['status','side','date','due','owner','audience','type','market','link','title','what','next','notes'].forEach(function (k) {
+          dd[k] = dv(k);
+        });
+      }
+      save(); closeDrawer(); render(); toast('Saved'); return;
+    }
+    if (a2 === 'del-doc') {
+      S.docs = S.docs.filter(function (x) { return x.id !== id; });
+      save(); closeDrawer(); render(); return;
+    }
+    if (a2 === 'log-brief') {
+      var titles = { markets: 'Product update brief to the SEO team and markets',
+        product: 'Product feedback note', agenda: 'Touch-base agenda', status: 'Status summary' };
+      var nd3 = { id: uid('doc'), side: briefKind === 'product' ? 'product' : 'market',
+        title: titles[briefKind] + ' — ' + fmt(TODAY), type: 'Note', status: 'sent',
+        owner: 'Owais', audience: briefKind === 'product' ? 'Adrian' : 'Ana, Sushanta, Aswine → markets',
+        date: TODAY, due: '', link: '', market: '',
+        what: (document.getElementById('brief-out') || { value: '' }).value.slice(0, 1500), next: '', relates: [] };
+      S.docs.unshift(nd3); save(); toast('Logged in Documents'); return;
+    }
+
     if (a2 === 'df-clear') { df.market = ''; df.band = ''; df.q = ''; render(); return; }
     if (a2 === 'edit-market') { drawerMarket(id); return; }
     if (a2 === 'save-market') {
@@ -2403,11 +3203,30 @@ document.addEventListener('click', function (e) {
     }
   }
 
-  var pmc = t.closest && t.closest('[data-pmcat]');
-  if (pmc) { pmSel = pmc.getAttribute('data-pmcat'); render(); return; }
+  var cd = t.closest && t.closest('[data-catdive]');
+  if (cd) {
+    var parts = cd.getAttribute('data-catdive').split('|');
+    drawerCat(parts[0], parts[1] || '');
+    return;
+  }
 
   var wz = t.closest && t.closest('[data-zone]');
-  if (wz) { var z = wz.getAttribute('data-zone'); pmZone = (pmZone === z ? '' : z); render(); return; }
+  if (wz) { drawerZone(wz.getAttribute('data-zone')); return; }
+
+  var ls = t.closest && t.closest('[data-lesson]');
+  if (ls) { learnSel = ls.getAttribute('data-lesson'); render(); window.scrollTo(0, 0); return; }
+
+  var ft = t.closest && t.closest('[data-feat]');
+  if (ft) { drawerFeature(ft.getAttribute('data-feat')); return; }
+
+  var sn = t.closest && t.closest('[data-stnode]');
+  if (sn) { drawerNode(sn.getAttribute('data-stnode')); return; }
+
+  var stt = t.closest && t.closest('[data-sttab]');
+  if (stt) { stTab = stt.getAttribute('data-sttab'); render(); return; }
+
+  var tlf = t.closest && t.closest('[data-tlf]');
+  if (tlf) { var k2 = tlf.getAttribute('data-tlf'); tlFilter = (tlFilter === k2 ? '' : k2); render(); return; }
 
   var cal = t.closest && t.closest('[data-cal]');
   if (cal) {
@@ -2441,6 +3260,7 @@ document.addEventListener('click', function (e) {
     else if (kind === 'project') drawerProject(oid);
     else if (kind === 'person') drawerPerson(oid);
     else if (kind === 'event') drawerEvent(oid);
+    else if (kind === 'doc') drawerDoc(oid);
     else if (kind === 'market') location.hash = '#/markets/' + encodeURIComponent(oid);
     else if (kind === 'assessment') location.hash = '#/check/' + encodeURIComponent(oid);
     return;
@@ -2463,6 +3283,8 @@ document.addEventListener('change', function (e) {
   if (t.id === 'df-market') { df.market = t.value; render(); }
   if (t.id === 'df-band') { df.band = t.value; render(); }
   if (t.id === 'df-sort') { df.sort = t.value; render(); }
+  if (t.id === 'doc-side') { docSide = t.value; render(); }
+  if (t.id === 'doc-status') { docStatus = t.value; render(); }
   if (t.id === 'ing-sheet') { ING.sheet = +t.value; ING.map = {}; render(); }
   if (t.id === 'ing-target') { ING.target = t.value; render(); }
   if (t.hasAttribute && t.hasAttribute('data-ingmap')) {
@@ -2499,6 +3321,14 @@ document.addEventListener('input', function (e) {
     window._q = setTimeout(function () {
       pf.q = t.value; render();
       var el = document.getElementById('pf-q');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    }, 260);
+  }
+  if (t.id === 'glos-q') {
+    clearTimeout(window._gq);
+    window._gq = setTimeout(function () {
+      glosQ = t.value; render();
+      var el = document.getElementById('glos-q');
       if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
     }, 260);
   }
