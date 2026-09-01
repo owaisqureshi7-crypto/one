@@ -2,6 +2,17 @@
 <html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
+<script>
+  /* Served from a sub-path such as /pod-work with no trailing slash, every relative
+     asset would resolve against the site root and 404. Adding the slash fixes it.
+     This can only ever fire once — the redirected URL already ends in a slash. */
+  (function () {
+    var p = location.pathname;
+    if (!/\/$/.test(p) && !/\.[a-z0-9]+$/i.test(p)) {
+      location.replace(p + '/' + location.search + location.hash);
+    }
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>One AZ &lt;&gt; SEO Liaison Desk</title>
 <link rel="stylesheet" href="assets/styles.css">
@@ -31,6 +42,12 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script>
+  /* Optional. Only needed if the state endpoint is NOT at <this folder>/api/state.
+     e.g. serving the app at /pod-work but the function at /api/liaison-state:
+     window.LIAISON_CONFIG = { api: '/api/liaison-state' };
+     Leave it commented out for the default behaviour. */
+</script>
 <script src="assets/data-core.js"></script>
 <script src="assets/data-product.js"></script>
 <script src="assets/data-market.js"></script>

@@ -109,10 +109,11 @@ function syncLine() {
   if (!window.SYNC) return '';
   var s = SYNC.state;
   if (!SYNC.available()) return 'Local file — sync is off. Serve this folder over https to enable it.';
-  if (!s.on) return 'Not connected. Enter your desk key to sync with the server.';
+  if (!s.on) return 'Not connected. Enter your desk key to sync with the server. Endpoint: ' + SYNC.endpoint();
   if (s.error) return 'Last attempt failed: ' + s.error;
   return 'Connected (' + (s.backend || 'server') + ') · version ' + (s.version === null ? '?' : s.version) +
-    (s.last ? ' · saved ' + s.last.replace('T', ' ').slice(0, 16) + ' UTC' : '');
+    (s.last ? ' · saved ' + s.last.replace('T', ' ').slice(0, 16) + ' UTC' : '') +
+    ' · ' + SYNC.endpoint();
 }
 
 /* --------------------------------------------------------- derived data */
