@@ -1,0 +1,241 @@
+/* PRODUCT SIDE.
+   Source: EUCAN Customer Engagement Q3-2026 PI Planning outputs (14–16 July 2026),
+   One AZ delivery plan 20 Jul – 9 Oct, plus the RAID / Action & Decision log.
+
+   `seo` and `why` are a FIRST-PASS READ, not something the product team wrote.
+   Each item carries assessment:'draft' until you confirm it — the Radar filters on that. */
+
+window.DATA_PRODUCT = {
+
+pi: {
+  name:'Q3 2026 PI', window:'20 Jul – 9 Oct 2026',
+  planned:'14–16 July 2026',
+  sprints:[
+    { n:1, dates:'3–14 Jul' }, { n:2, dates:'15–30 Jul' }, { n:3, dates:'31 Jul – 11 Aug' },
+    { n:4, dates:'12–27 Aug' }, { n:5, dates:'28 Aug – 8 Sep' }, { n:6, dates:'9–25 Sep' }
+  ],
+  releases:['20 August release','17 September release']
+},
+
+/* status: delivered | on-track | at-risk | blocked | spike
+   flag:   'none' | 'to-markets' | 'to-product' | 'both'
+   comms:  { markets:'', product:'' }  — the date you actually told them */
+items: [
+  { id:'EBPT-4625', title:'Localised URL Slug', ws:'OneAZ', sprint:'Q3 features', status:'on-track',
+    seo:'high', tags:['url','translation','nav'], markets:['ALL'], assessment:'draft',
+    why:'Directly changes how URLs are produced. Every market URL recommendation the team has written — Germany across 13 brands, the Baltics, Austria, Portugal — assumes the current slug behaviour. If localised slugs land, existing structures may need re-derivation and live markets need redirects.',
+    toMarkets:'Do not sign off new URL structures for pages that will be re-slugged. Ask which locales are in scope and when.',
+    toProduct:'We need the slug rules in writing before release: transliteration, casing, the .html convention, and what happens to an existing URL when a slug changes. Switzerland is already blocked on re-pointing live URLs — this must not add a second wave.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5585', title:'One AZ IT — PoC: concurrent serving of One AZ and legacy promotional pages under the same domain',
+    ws:'OneAZ', sprint:'Q3 features', status:'spike', seo:'high', tags:['url','indexation','template'],
+    markets:['IT'], assessment:'draft',
+    why:'Two page systems on one hostname is a canonical and duplicate-content problem before it is anything else. The RAID log already flags routing and authentication risk. Whatever is decided for Italy becomes the pattern every market with a legacy estate inherits — Spain has not started its migration and would be next.',
+    toMarkets:'Italy only for now. Spain should know this PoC exists before committing to a migration sequence.',
+    toProduct:'Ask to review the routing rules before the PoC closes: canonical strategy, which system owns robots.txt and the XML sitemap, and how redirects are staged. This is the cheapest moment to get it right.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'RAID-8', title:'One AZ card components — Pflichttext compliance limits reusability',
+    ws:'OneAZ', sprint:'RAID (log 3 of 3)', status:'at-risk', seo:'high', tags:['template','compliance','content'],
+    markets:['DE','AT'], assessment:'draft',
+    why:'Product has written down exactly the problem the liaison role exists for: a market-specific compliance requirement making a global component less reusable. Germany cannot ship a template with no slot for mandatory local text. The mitigation on the log is "design a configurable global solution" — that is the right answer and worth backing.',
+    toMarkets:'Germany and Austria: confirm the mandatory-text requirement in writing so the configurable solution is designed against the real rule.',
+    toProduct:'Support the configurable global solution over per-market forks, and offer the German Pflichttext page set as the test case. Owner on the log: GCIT.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4909', title:'Preserving tab component & anchor link parameter on login redirect',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'high', tags:['template','auth','content','nav'],
+    markets:['ALL'], assessment:'draft',
+    why:'Tabs are where content goes to hide. Switzerland proved the opposite case: a CVRM therapy-area page carried its content as tabs inside one URL, we recommended splitting each tab into a dedicated page, the market implemented it and performance improved. The same happened on ATTR / Seethepattrns. If tab state is being made addressable, that is an opportunity — ask whether tab content is in the DOM at load and whether anchored states are canonicalised.',
+    toMarkets:'Do not treat this as a fix for tabbed content. Splitting tabs into pages is still the recommendation where reach matters.',
+    toProduct:'Ask two questions: is tab content server-rendered, and does an anchored tab URL get its own canonical? If tabs stay one URL, the Sitemap Governance 7-tab structure keeps burying indexable content.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4742', title:'Advanced Search for Medical — Veeva Vault integration and advanced filtering',
+    ws:'OneAZ Medical', sprint:'Q2 spill-over', status:'on-track', seo:'medium', tags:['nav','indexation','performance'],
+    markets:['ALL'], assessment:'draft',
+    why:'Faceted search is the classic source of crawl-budget waste and near-duplicate URLs. Germany already runs URL structuring off filters ("Imfinzi" + "Imfinzi Lung", "Imfinzi GI"), so filtered views are already URL-bearing in at least one market.',
+    toMarkets:'None yet — hold until the URL behaviour of filters is known.',
+    toProduct:'Ask whether filter and search states generate crawlable URLs. If they do, we need parameter handling, canonicals and a robots position before rollout, not after.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-3330', title:'Medical integration — Megamenu component',
+    ws:'OneAZ Medical', sprint:'Q2 spill-over', status:'on-track', seo:'medium', tags:['nav','template','performance'],
+    markets:['ALL'], assessment:'draft',
+    why:'The megamenu is the internal linking layer for the whole portal. Sitemap Governance caps it at 5 columns and 10 links per column, and only content pages carry URLs. A change here changes how link equity and crawl paths flow on every One AZ site at once.',
+    toMarkets:'Once shipped, re-check that navigation-only labels still have no URLs and breadcrumbs still list content pages only.',
+    toProduct:'Ask for links to be real anchors in the served HTML rather than script-built, and confirm the governance caps are enforced by the component.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5276', title:'Passwordless magic link UX — return user to requested page',
+    ws:'OneAZ', sprint:'Q3 features', status:'at-risk', seo:'medium', tags:['auth','gated'],
+    markets:['ALL','NL'], assessment:'draft',
+    why:'The Swiss lead-in paywall works because the existing AEM login and 302 flow already holds Swissmedic and TPA compliance — nothing new to build. A redesign of the authentication redirect touches exactly that flow. RAID owner Deva, resolution TBD, redesign possible.',
+    toMarkets:'Switzerland: flag that the access path underneath the paywall pilot is being reworked, so the build window 29 Sep – 10 Oct may need a re-test.',
+    toProduct:'Ask that the teaser-to-login path be kept in the test matrix, and that the 302 behaviour on a gated URL does not change without notice.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5368', title:'Netherlands — redirect magic link and design uplift',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'medium', tags:['auth','template'],
+    markets:['NL'], assessment:'draft',
+    why:'Lands in the same month as the Dutch One AZ URL structuring review and a 120-page metadata review. A design uplift mid-review means the metadata set may be written against a page structure that is about to change.',
+    toMarkets:'Netherlands: sequence the design uplift and the metadata review so the 120 pages are not written twice.',
+    toProduct:'Ask for the uplift date so the SEO work is scheduled behind it.',
+    flag:'to-markets', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5419', title:'Spain — migration to redirect authentication',
+    ws:'OneAZ', sprint:'Q2 spill-over', status:'at-risk', seo:'medium', tags:['auth','url'],
+    markets:['ES'], assessment:'draft',
+    why:'Spain has not started One AZ URL structuring and is running GEO and on-page work on top priority pages first. An authentication migration in the same market, with QA capacity flagged as a risk on the RAID log, is a sequencing problem.',
+    toMarkets:'Spain: confirm whether the redirect authentication migration changes any public URL. If it does, the priority-page optimisation needs re-checking after.',
+    toProduct:'Ask whether public (non-gated) URLs are affected. If not, say so plainly — it de-risks the Spanish plan.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4769', title:'Italy — implement redirect registration and login for One AZ',
+    ws:'OneAZ', sprint:'Q2 spill-over', status:'on-track', seo:'low', tags:['auth'],
+    markets:['IT'], assessment:'draft',
+    why:'Italy is outside EUCAN SEO scope today, but pairs with the concurrent-serving PoC. Worth watching only as a signal of where the access-path standard is heading.',
+    toMarkets:'None.', toProduct:'None yet — watch item.',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5127', title:'Switzerland — consent capture page shown only to HCPs without an existing email opt-in',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'medium', tags:['gated','auth','compliance'],
+    markets:['CH'], assessment:'draft',
+    why:'An interstitial in the Swiss journey, in the market running the lead-in paywall pilot. If a consent page can appear ahead of a teaser page for an unauthenticated visitor, indexable content is behind an interstitial — which is the one thing the lead-in model must not do.',
+    toMarkets:'Switzerland: confirm the consent page cannot render for anonymous or crawler traffic on lead-in pages.',
+    toProduct:'Ask for the trigger conditions in writing, and for lead-in URLs to be excluded.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5149', title:'Session expiry enhancement — inactivity warning and logout popup (DE)',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'low', tags:['auth','performance'],
+    markets:['DE'], assessment:'draft',
+    why:'Low SEO risk on gated pages. Worth one check that the popup does not render on public pages where it would affect layout stability.',
+    toMarkets:'None.', toProduct:'One question: public pages excluded?',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4759', title:'Kaltura V7 playlist capability and gallery component UX (multi-market scalable video)',
+    ws:'OneAZ', sprint:'Q3 features', status:'spike', seo:'medium', tags:['template','schema','performance','content'],
+    markets:['ALL'], assessment:'draft',
+    why:'A new content type arriving across markets. Video is a structured-data and performance surface: without VideoObject schema, transcripts and lazy loading, a gallery adds weight and returns nothing to search or to AI answers. Transcripts in particular are the cheapest GEO win available in a video component.',
+    toMarkets:'Nothing to cascade yet — this is the moment to shape it instead.',
+    toProduct:'Ask for VideoObject schema generated by the component, a transcript field in the authoring model, and lazy loading by default. Cheap now, expensive per market later.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4732', title:'Federated design token system (global + regional + brand colours + component alignment)',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'low', tags:['template','performance'],
+    markets:['ALL'], assessment:'draft',
+    why:'Mostly cosmetic, but it is the vehicle by which component behaviour becomes standard across markets. If SEO and GEO requirements are ever going to ship inside components, this is the machinery that would carry them.',
+    toMarkets:'None.',
+    toProduct:'Worth asking whether the same federation model could carry SEO defaults — heading semantics, schema hooks, metadata patterns — not just colour.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-3725', title:'NextGen personalisation support with One AZ market roll-out',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'medium', tags:['personalisation','content','indexation'],
+    markets:['ALL'], assessment:'draft',
+    why:'Personalised content that varies for the same URL is invisible to a crawler and unstable for an AI answer. Pairs with the MCP dependency where GCS must tell the MCP team which AEM pages are article vs non-article.',
+    toMarkets:'Markets in MCP Phase 1 need to know that a page added or removed in AEM must be reported, or personalisation silently breaks.',
+    toProduct:'Ask what an unauthenticated crawler is served on a personalised page, and confirm a stable default variant exists.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'EBPT-3092', title:'Personalisation landing page (pitch-view style)',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'medium', tags:['personalisation','template','indexation'],
+    markets:['ALL'], assessment:'draft',
+    why:'A new page type. Decide up front whether it is indexable at all — if it is personalised per user it almost certainly should not be, and that decision belongs in the template, not in 21 local robots files.',
+    toMarkets:'None yet.',
+    toProduct:'Ask for an explicit indexation decision baked into the template: noindex by default is the likely right answer.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EUC-19745', title:'Global map finder component enhancement',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'low', tags:['template','schema'],
+    markets:['ALL'], assessment:'draft',
+    why:'Finder components usually generate parameterised URLs and rarely carry useful markup. Low priority unless it produces crawlable result URLs.',
+    toMarkets:'None.', toProduct:'One question: does it produce crawlable URLs?',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'EBPT-2725', title:'Component and feature usage reporting for One AZ',
+    ws:'OneAZ', sprint:'Q2 spill-over', status:'on-track', seo:'medium', tags:['analytics','template'],
+    markets:['ALL'], assessment:'draft',
+    why:'Quietly one of the most useful items on the board for us. If we can see which components each market actually uses, we can target SEO and GEO standards at the components that carry real page volume instead of guessing.',
+    toMarkets:'None.',
+    toProduct:'Ask for read access to the usage reporting when it lands. This is a small ask with a large payoff for prioritising the playbook.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4748', title:'Full webshop integration with One AZ',
+    ws:'OneAZ', sprint:'Q3 features', status:'blocked', seo:'low', tags:['template','indexation'],
+    markets:['ALL'], assessment:'draft',
+    why:'Blocked on Enterprise Architecture design per the RAID log. A commerce surface inside an HCP portal raises indexation and compliance questions, but nothing is decided yet.',
+    toMarkets:'None.', toProduct:'Watch. Ask to see the EA design when it exists.',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4265', title:'Webinar events PoC — One AZ × Veeva Events × webinar vendor',
+    ws:'OneAZ', sprint:'Q3 features', status:'at-risk', seo:'low', tags:['template','schema','content'],
+    markets:['ALL'], assessment:'draft',
+    why:'RAID-flagged: unclear technical requirements, multiple vendors, needed by Sprint 3. Events pages are a natural Event schema surface and are frequently gated by default without anyone deciding to gate them.',
+    toMarkets:'None.',
+    toProduct:'When requirements firm up, ask for Event structured data and an explicit public-vs-gated decision.',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'EBPT-4744', title:'Scalable email consent capture and frictionless registration framework',
+    ws:'OneAZ', sprint:'Q3 features', status:'at-risk', seo:'medium', tags:['auth','gated','compliance'],
+    markets:['ALL'], assessment:'draft',
+    why:'RAID-flagged: user journeys and business process not yet available, risk of designing against assumptions. Registration friction is exactly where a teaser layer either works or does not. This is the framework the lead-in paywall model would eventually sit on.',
+    toMarkets:'None yet.',
+    toProduct:'Ask to be in the requirements workshop. The lead-in paywall pattern is a live, evidenced use case for that framework and should be an input to it.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5100', title:'GDPR-compliant governance and remediation of engagement tracking (like/save/share)',
+    ws:'OneAZ', sprint:'Q3 features', status:'on-track', seo:'low', tags:['analytics','compliance'],
+    markets:['ALL'], assessment:'draft',
+    why:'Could touch the analytics we rely on for post-launch reporting and the 30-day paywall measurement window.',
+    toMarkets:'None.',
+    toProduct:'One question: does anything change in Adobe Analytics or GSC-adjacent measurement? Our reporting cadence depends on it.',
+    flag:'to-product', comms:{markets:'',product:''} },
+
+  { id:'EBPT-5161', title:'One AZ global email template governance centralisation and operational audit [spike]',
+    ws:'OneAZ', sprint:'Q3 features', status:'spike', seo:'low', tags:['template','analytics'],
+    markets:['ALL'], assessment:'draft',
+    why:'Email, not web. Relevant only as a governance precedent — it shows the product team will centralise a standard when the case is made.',
+    toMarkets:'None.', toProduct:'None. Useful precedent to cite when arguing for centralised SEO standards.',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'MCP-FLAG', title:'MCP personalisation — no flag to exclude non-article pages, and GCS must report page adds/deletes',
+    ws:'MCP Transformation', sprint:'RAID (log 2 of 3)', status:'at-risk', seo:'medium',
+    tags:['personalisation','content','intake'], markets:['RS','HR','PL','LT','RO','SK','HU','UK','BE','CH'], assessment:'draft',
+    why:'AEM sends every page to MCP, including Home, Contact us, Thank you and Overview pages, and there is no flag to exclude them. Until the capability is built, GCS supplies the list manually. Two open risks are owned by GCS: telling the MCP team when a page is added, and when one is deleted.',
+    toMarkets:'The ten MCP Phase 1 markets need a named person who reports AEM page adds and deletions. Without it, personalisation degrades quietly.',
+    toProduct:'Support building the article / non-article flag this PI rather than carrying a manual list. Offer the page inventories we already hold from URL structuring work.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'INC4514462', title:'Contact us form and order list (incident)',
+    ws:'OneAZ', sprint:'Q2 spill-over', status:'at-risk', seo:'low', tags:['template'],
+    markets:['ALL'], assessment:'draft',
+    why:'Contact Us is a mandatory utility-nav page in the Sitemap Governance doc, and carries adverse-event reporting. Worth confirming it stays reachable and indexable.',
+    toMarkets:'None.', toProduct:'Confirm the page stays crawlable through the fix.',
+    flag:'none', comms:{markets:'',product:''} },
+
+  { id:'SITEMAP-GAMMA', title:'Sitemap Governance for One AZ portals — Gamma v3.1',
+    ws:'Global One AZ', sprint:'Standing standard', status:'delivered', seo:'high',
+    tags:['url','nav','template','content'], markets:['ALL'], assessment:'confirmed',
+    why:'This is the document every URL and IA recommendation is written against — the .html convention, content pages only in URLs and breadcrumbs, max 7 top-nav tabs with three mandatory, 5 nav columns of 10, max 7 in-page tabs with 7 links per dropdown, mandatory product sub-sections. Owner: Florian Howe, dated 20/10/2025.',
+    toMarkets:'Markets choose their own page count, order and naming within the structure — that discretion is in the document and is worth repeating, because it is where markets assume they have less freedom than they do.',
+    toProduct:'Ask to be notified of any version above Gamma 3.1 before it is published, and to review the SEO-relevant sections. The document already lists "ensure SEO best practices are followed" as an objective — that objective needs specifics attached to it.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'INTAKE-SEO', title:'SEO and GEO selections added to the Web Delivery intake form',
+    ws:'Web Delivery', sprint:'Live — WESE and Canada pilot', status:'delivered', seo:'high',
+    tags:['intake'], markets:['CH','AT','PT','NL','BE','CA'], assessment:'confirmed',
+    why:'Three selections on the intake form — Web default (new page), One AZ existing page (SEO/GEO content optimisation), and Paywall — determine which package runs and when SEO is triggered. Live in the WESE and Canada workspaces. Project lead: Patricia Marques.',
+    toMarkets:'Digital leads and the PM/CDM supporting each pilot market need to know which selection triggers which package and at what project phase.',
+    toProduct:'Confirm the timeline for widening beyond WESE and Canada so delivery capacity can be planned against it.',
+    flag:'both', comms:{markets:'',product:''} },
+
+  { id:'JIRA-PKG', title:'Jira web packages updated — auditing and post-launch reporting now standard',
+    ws:'Web Delivery', sprint:'Live', status:'delivered', seo:'medium', tags:['intake','analytics'],
+    markets:['CH','AT','PT','NL','BE','CA'], assessment:'confirmed',
+    why:'Added to both New Web Page and Web Page Update packages: SEO reporting (post-launch performance), SEO optimal page content wireframe, and SEO pre- and post-launch auditing. Removed: SEO wireframe / layout recommendations, superseded by the new wireframe activity. The loop now closes without anyone remembering to ask.',
+    toMarkets:'Stop quoting the removed wireframe activity. Auditing no longer needs to be requested separately.',
+    toProduct:'Informational. Worth repeating at the touch-base as evidence that embedding SEO at the ordering layer works.',
+    flag:'to-markets', comms:{markets:'',product:'2026-08-22'} }
+]
+};
